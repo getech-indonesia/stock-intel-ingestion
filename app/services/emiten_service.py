@@ -4,7 +4,6 @@ from math import ceil
 from typing import Any, Dict, List, Optional, Tuple
 import cloudscraper
 import requests
-
 from config.settings import REQUEST_TIMEOUT
 
 
@@ -33,6 +32,8 @@ IDX_HEADERS = {
     "Referer": "https://www.idx.co.id/",
 }
 
+_IDX_SCRAPER = None
+
 
 def _get_json(url: str, params: Optional[dict] = None, headers: Optional[dict] = None) -> dict:
     response = requests.get(url, params=params or {}, headers=headers or AJAIB_HEADERS, timeout=REQUEST_TIMEOUT)
@@ -40,13 +41,27 @@ def _get_json(url: str, params: Optional[dict] = None, headers: Optional[dict] =
     return response.json()
 
 
+def _get_idx_scraper(reset: bool = False):
+    global _IDX_SCRAPER
+    if _IDX_SCRAPER is None or reset:
+        _IDX_SCRAPER = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
+    return _IDX_SCRAPER
+
+
 def _get_json_cloudscraper(url: str, params: Optional[dict] = None, headers: Optional[dict] = None) -> dict:
-    scraper = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "mobile": False}
-    )
-    response = scraper.get(url, params=params or {}, headers=headers or AJAIB_HEADERS, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
-    return response.json()
+    scraper = _get_idx_scraper()
+    try:
+        response = scraper.get(url, params=params or {}, headers=headers or AJAIB_HEADERS, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        # Recreate scraper once; stale or blocked sessions can fail during large list fetches.
+        scraper = _get_idx_scraper(reset=True)
+        response = scraper.get(url, params=params or {}, headers=headers or AJAIB_HEADERS, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.json()
 
 
 def fetch_ajaib_stock_page(
@@ -131,6 +146,13 @@ def fetch_idx_company_profile(symbol: str) -> dict:
             params=params,
             headers=IDX_HEADERS,
         )
+    except Exception:
+        # Network/intermittent errors should still attempt the IDX scraper path.
+        payload = _get_json_cloudscraper(
+            IDX_PROFILE_URL,
+            params=params,
+            headers=IDX_HEADERS,
+        )
 
     def _find_key_recursive(obj: Any, key: str) -> Any:
         if isinstance(obj, dict):
@@ -150,6 +172,7 @@ def fetch_idx_company_profile(symbol: str) -> dict:
     merged: Dict[str, Any] = dict(payload) if isinstance(payload, dict) else {"raw": payload}
     profiles = _find_key_recursive(payload, "Profiles")
     profile = profiles[0] if isinstance(profiles, list) and profiles else {}
+
     merged["profile"] = profile
 
     list_keys = [
@@ -280,6 +303,7 @@ def _build_prisma_payload(symbol: str, ajaib_item: dict, idx_payload: dict) -> d
     company = _build_company_payload(symbol, ajaib_item, profile, idx_payload)
 
     return {
+        "symbol": symbol,
         "country": _build_country_payload(),
         "exchange": _build_exchange_payload(),
         "sector": {"name": profile.get("Sektor")},
@@ -322,7 +346,11 @@ def scrape_emiten_list(
         try:
             idx_payload = fetch_idx_company_profile(symbol)
         except Exception:
-            idx_payload = {"profile": {}}
+            try:
+                _get_idx_scraper(reset=True)
+                idx_payload = fetch_idx_company_profile(symbol)
+            except Exception:
+                idx_payload = {"profile": {}}
 
         enriched_items.append(_build_prisma_payload(symbol, ajaib_item, idx_payload))
 
