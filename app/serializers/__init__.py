@@ -1,0 +1,1 @@
+"""Serializer layer for app."""
