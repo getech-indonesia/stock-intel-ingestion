@@ -1,7 +1,7 @@
 from flask import current_app
 from typing import Optional
 
-from app.scraper import scrape_fundamental, find_shareholders
+from app.scrapers.fundamental import scrape_fundamental, find_shareholders
 from app.db import get_fundamental_result, save_fundamental_result
 from utils.ai import summarize_fundamental, extract_financial_metrics
 from utils.market import fetch_market_snapshot

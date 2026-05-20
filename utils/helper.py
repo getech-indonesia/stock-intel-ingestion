@@ -1,4 +1,4 @@
-from app.scraper import scrape_fundamental, find_shareholders
+from app.scrapers.fundamental import scrape_fundamental, find_shareholders
 from app.db import get_fundamental_result, save_fundamental_result
 
 VALID_QUARTERS = {"Q1", "Q2", "Q3", "Q4"}

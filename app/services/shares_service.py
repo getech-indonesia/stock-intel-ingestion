@@ -1,4 +1,4 @@
-from app.scraper import scrape_shares_data
+from app.scrapers.shares import scrape_shares_data
 
 
 def fetch_and_build_shares_data(symbol: str) -> dict:

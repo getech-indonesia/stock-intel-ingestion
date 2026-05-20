@@ -6,10 +6,12 @@ from app.validators import (
     validate_fundamental_request,
     validate_shares_data_request,
     validate_technical_request,
+    validate_stock_price_request,
 )
 from app.services.fundamental_service import fetch_and_build_fundamental
 from app.services.emiten_service import scrape_emiten_detail, scrape_emiten_list
 from app.services.shares_service import fetch_and_build_shares_data
+from app.services.stock_price_service import fetch_and_build_stock_price
 from app.serializers.emiten_serializer import serialize_emiten_detail, serialize_emiten_list
 from utils.technical import fetch_technical_analysis
 
@@ -113,4 +115,23 @@ def get_shares_data():
         return jsonify({
             "status": "error",
             "message": "Failed to fetch shares data from IDX. Please try again later.",
+        }), 502
+
+
+@bp.route("/stock-price", methods=["GET"])
+def get_stock_price():
+    query = request.args.to_dict(flat=True)
+    symbol, errors = validate_stock_price_request(query)
+    if errors:
+        return jsonify({"status": "error", "errors": errors}), 400
+
+    try:
+        result = fetch_and_build_stock_price(symbol)
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    except Exception:
+        return jsonify({
+            "status": "error",
+            "message": "Failed to fetch stock price data from IDX. Please try again later.",
         }), 502

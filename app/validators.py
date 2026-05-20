@@ -91,3 +91,20 @@ def validate_shares_data_request(body: dict) -> Tuple[Optional[str], List[str]]:
         errors.append("'symbol' is required (e.g. 'BBCA')")
 
     return symbol, errors
+
+
+def validate_stock_price_request(body: dict) -> Tuple[Optional[str], List[str]]:
+    body = body or {}
+    symbol = (
+        body.get("symbol")
+        or body.get("emiten")
+        or body.get("kode_emiten")
+        or ""
+    )
+    symbol = str(symbol).strip().upper() or None
+
+    errors = []
+    if not symbol:
+        errors.append("'symbol' is required (e.g. 'BBCA')")
+
+    return symbol, errors
