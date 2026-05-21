@@ -2,12 +2,14 @@
 from flask import Blueprint, request, jsonify
 
 from app.validators import (
+    validate_corporate_action_request,
     validate_emiten_request,
     validate_fundamental_request,
     validate_shares_data_request,
     validate_technical_request,
     validate_stock_price_request,
 )
+from app.services.corporate_action_service import fetch_and_build_corporate_action
 from app.services.fundamental_service import fetch_and_build_fundamental
 from app.services.emiten_service import scrape_emiten_detail, scrape_emiten_list
 from app.services.shares_service import fetch_and_build_shares_data
@@ -115,6 +117,29 @@ def get_shares_data():
         return jsonify({
             "status": "error",
             "message": "Failed to fetch shares data from IDX. Please try again later.",
+        }), 502
+
+
+@bp.route("/corporate-action", methods=["GET"])
+def get_corporate_action():
+    query = request.args.to_dict(flat=True)
+    ca_type, date_from, date_to, start, length, errors = validate_corporate_action_request(query)
+    if errors:
+        return jsonify({"status": "error", "errors": errors}), 400
+
+    try:
+        result = fetch_and_build_corporate_action(
+            ca_type=ca_type,
+            date_from=date_from,
+            date_to=date_to,
+            start=start,
+            length=length,
+        )
+        return jsonify(result)
+    except Exception:
+        return jsonify({
+            "status": "error",
+            "message": "Failed to fetch corporate action data from IDX. Please try again later.",
         }), 502
 
 

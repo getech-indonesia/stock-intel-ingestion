@@ -5,7 +5,7 @@ from app.scrapers.common import HEADERS, _get_json_cloudscraper
 IDX_STOCK_PRICE_URL = "https://www.idx.co.id/primary/ListedCompany/GetTradingInfoSS"
 
 
-def fetch_idx_stock_price(symbol: str, start: int = 0, length: int = 2000) -> dict:
+def fetch_idx_stock_price(symbol: str, start: int = 0, length: int = 9999) -> dict:
     normalized_symbol = str(symbol or "").strip().upper()
     if not normalized_symbol:
         raise ValueError("Invalid symbol.")

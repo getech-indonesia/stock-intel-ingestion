@@ -108,3 +108,32 @@ def validate_stock_price_request(body: dict) -> Tuple[Optional[str], List[str]]:
         errors.append("'symbol' is required (e.g. 'BBCA')")
 
     return symbol, errors
+
+
+def validate_corporate_action_request(body: dict) -> Tuple[Optional[str], Optional[str], Optional[str], int, int, List[str]]:
+    body = body or {}
+    ca_type = str(body.get("caType") or body.get("ca_type") or "").strip() or None
+    date_from = str(body.get("dateFrom") or body.get("date_from") or "").strip() or None
+    date_to = str(body.get("dateTo") or body.get("date_to") or "").strip() or None
+    start = body.get("start", 0)
+    length = body.get("length", 9999)
+
+    errors = []
+
+    try:
+        start = int(start)
+        if start < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        errors.append("'start' must be a non-negative integer")
+        start = 0
+
+    try:
+        length = int(length)
+        if length < 1:
+            raise ValueError
+    except (TypeError, ValueError):
+        errors.append("'length' must be a positive integer")
+        length = 9999
+
+    return ca_type, date_from, date_to, start, length, errors

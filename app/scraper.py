@@ -1,4 +1,5 @@
 from app.scrapers.stock_price import fetch_idx_stock_price
+from app.scrapers.corporate_action import fetch_idx_corporate_action
 from app.scrapers.shares import (
     fetch_idx_shares_announcements,
     scrape_shares_data,
