@@ -26,6 +26,31 @@ def validate_fundamental_request(body: dict) -> Tuple[str, Any, Any, List[str]]:
     return symbol, year, quarter, errors
 
 
+def validate_income_statement_request(body: dict) -> Tuple[Optional[str], Any, List[str]]:
+    body = body or {}
+    symbol = (
+        body.get("symbol")
+        or body.get("emiten")
+        or body.get("kode_emiten")
+        or ""
+    )
+    symbol = str(symbol).strip().upper() or None
+    year = body.get("year")
+
+    errors = []
+    if not symbol:
+        errors.append("'symbol' is required (e.g. 'BBCA')")
+    if not year:
+        errors.append("'year' is required (e.g. 2025)")
+    else:
+        try:
+            year = int(year)
+        except (TypeError, ValueError):
+            errors.append("'year' must be a valid integer")
+
+    return symbol, year, errors
+
+
 def validate_technical_request(body: dict) -> Tuple[str, List[str]]:
     body = body or {}
     emiten = (
