@@ -92,6 +92,74 @@ BALANCE_NUMERIC_ALIASES = {
     "totalEquity": ["totalequity", "jumlahekuitas", "totalekuitas"],
 }
 
+CASH_FLOW_NUMERIC_ALIASES = {
+    "netIncomeStart": ["netincome", "profitfortheperiod", "profitfortheyear", "lababersih", "labaperiodiberjalan"],
+    "depreciationAmort": ["depreciationamort", "depreciationandamortization", "depreciationamortization", "penyusutandanamortisasi"],
+    "stockBasedCompensation": ["stockbasedcompensation", "sharebasedcompensation", "sharebasedpayment", "kompensasisaham", "pembayaranberbasissaham"],
+    "changeInWorkingCapital": ["changeinworkingcapital", "changesinworkingcapital", "perubahanmodalkerja"],
+    "changeInReceivables": ["changeinreceivables", "changesinreceivables", "changeintradeandotherreceivables", "perubahanpiutang"],
+    "changeInInventory": ["changeininventory", "changesininventory", "perubahanpersediaan"],
+    "changeInPayables": ["changeinpayables", "changesinpayables", "changeintradepayables", "perubahanutangusaha"],
+    "otherOperatingActivities": ["otheroperatingactivities", "otheroperatingcashflows", "activitiessetelahtax", "aktivitasoperasilainnya"],
+    "netCashFromOperations": [
+        "netcashfromoperations",
+        "netcashfromoperatingactivities",
+        "netcashprovidedbyoperatingactivities",
+        "aruskasbersihdariaktivitasoperasi",
+    ],
+    "capitalExpenditures": [
+        "capitalexpenditures",
+        "capex",
+        "purchaseofpropertyplantandequipment",
+        "purchaseofppe",
+        "pembelianaset tetap",
+        "pembelianpropertyplantandequipment",
+    ],
+    "acquisitions": ["acquisitions", "acquisitionofsubsidiaries", "akuisisi"],
+    "purchaseOfInvestments": ["purchaseofinvestments", "purchaseofmarketablesecurities", "pembelianinvestasi"],
+    "saleOfInvestments": ["saleofinvestments", "proceedsfromsaleofinvestments", "penjualaninvestasi"],
+    "otherInvestingActivities": ["otherinvestingactivities", "otherinvestingcashflows", "aktivitasinvestasilainnya"],
+    "netCashFromInvesting": [
+        "netcashfrominvesting",
+        "netcashfrominvestingactivities",
+        "netcashusedininvestingactivities",
+        "aruskasbersihdariaktivitasinvestasi",
+    ],
+    "debtIssuance": ["debtissuance", "proceedsfromdebt", "proceedsfromborrowings", "penerimaanpinjaman"],
+    "debtRepayment": ["debtrepayment", "repaymentofdebt", "paymentofborrowings", "pelunasanpinjaman"],
+    "commonStockIssuance": ["commonstockissuance", "issuanceofcommonstock", "proceedsfromissuanceofshares", "penerbitansaham"],
+    "commonStockRepurchase": ["commonstockrepurchase", "repurchaseofcommonstock", "treasurystockpurchase", "pembeliankembalisaham"],
+    "dividendsPaid": ["dividendspaid", "paymentofdividends", "dividendspaidtoshareholders", "dividendibayar"],
+    "otherFinancingActivities": ["otherfinancingactivities", "otherfinancingcashflows", "aktivitaspendanaanlainnya"],
+    "netCashFromFinancing": [
+        "netcashfromfinancing",
+        "netcashfromfinancingactivities",
+        "netcashprovidedbyfinancingactivities",
+        "aruskasbersihdariaktivitaspendanaan",
+    ],
+    "netChangeInCash": [
+        "netchangeincash",
+        "netincreaseindcashandcashequivalents",
+        "netincreasedecreaseincash",
+        "perubahanbersihkas",
+    ],
+    "cashBeginningPeriod": [
+        "cashbeginningperiod",
+        "cashandcashequivalentsatthebeginningoftheperiod",
+        "cashatthebeginningoftheperiod",
+        "kasawaltahun",
+        "kasawalperiode",
+    ],
+    "cashEndPeriod": [
+        "cashendperiod",
+        "cashandcashequivalentsattheendoftheperiod",
+        "cashattheendoftheperiod",
+        "kasakhirtahun",
+        "kasakhirperiode",
+    ],
+    "freeCashFlow": ["freecashflow", "freecashflowfcf", "fcf"],
+}
+
 FIELD_BLOCKED_TOKENS = {
     "incomeTaxExpense": ["sebelumpajak", "beforetax"],
 }
@@ -288,6 +356,15 @@ def _balance_sheet_score(sheet_name: str) -> int:
     lower = (sheet_name or "").lower()
     score = 0
     for keyword in ["balance", "position", "neraca", "aset", "liabilitas", "ekuitas"]:
+        if keyword in lower:
+            score += 3
+    return score
+
+
+def _cash_flow_sheet_score(sheet_name: str) -> int:
+    lower = (sheet_name or "").lower()
+    score = 0
+    for keyword in ["cash flow", "cashflow", "arus kas", "cash flows", "statement of cash flows"]:
         if keyword in lower:
             score += 3
     return score
@@ -617,6 +694,114 @@ def _extract_balance_metrics(rows: list[list[Any]], year: int) -> dict[str, Any]
     return metrics
 
 
+def _extract_cash_flow_metrics(rows: list[list[Any]], year: int) -> dict[str, Any]:
+    year_columns = _find_year_columns(rows, year)
+    unit_multiplier = _detect_unit_multiplier(rows)
+    metrics: dict[str, Any] = {}
+
+    for field, aliases in CASH_FLOW_NUMERIC_ALIASES.items():
+        metrics[field] = _extract_field_numeric(rows, aliases, year_columns, year, unit_multiplier, field_name=field)
+
+    metrics["currency"] = _extract_currency(rows)
+
+    if metrics.get("changeInWorkingCapital") is None:
+        working_capital_components = [metrics.get("changeInReceivables"), metrics.get("changeInInventory"), metrics.get("changeInPayables")]
+        if any(isinstance(value, (int, float)) for value in working_capital_components):
+            metrics["changeInWorkingCapital"] = sum(float(value) for value in working_capital_components if isinstance(value, (int, float)))
+
+    if metrics.get("netCashFromOperations") is None:
+        operating_components = [
+            metrics.get("netIncomeStart"),
+            metrics.get("depreciationAmort"),
+            metrics.get("stockBasedCompensation"),
+            metrics.get("changeInWorkingCapital"),
+            metrics.get("otherOperatingActivities"),
+        ]
+        if any(isinstance(value, (int, float)) for value in operating_components):
+            metrics["netCashFromOperations"] = sum(float(value) for value in operating_components if isinstance(value, (int, float)))
+
+    if metrics.get("netCashFromInvesting") is None:
+        investing_components = [
+            metrics.get("capitalExpenditures"),
+            metrics.get("acquisitions"),
+            metrics.get("purchaseOfInvestments"),
+            metrics.get("saleOfInvestments"),
+            metrics.get("otherInvestingActivities"),
+        ]
+        if any(isinstance(value, (int, float)) for value in investing_components):
+            metrics["netCashFromInvesting"] = sum(float(value) for value in investing_components if isinstance(value, (int, float)))
+
+    if metrics.get("netCashFromFinancing") is None:
+        financing_components = [
+            metrics.get("debtIssuance"),
+            metrics.get("debtRepayment"),
+            metrics.get("commonStockIssuance"),
+            metrics.get("commonStockRepurchase"),
+            metrics.get("dividendsPaid"),
+            metrics.get("otherFinancingActivities"),
+        ]
+        if any(isinstance(value, (int, float)) for value in financing_components):
+            metrics["netCashFromFinancing"] = sum(float(value) for value in financing_components if isinstance(value, (int, float)))
+
+    if metrics.get("netChangeInCash") is None:
+        change_sources = [metrics.get("netCashFromOperations"), metrics.get("netCashFromInvesting"), metrics.get("netCashFromFinancing")]
+        if any(isinstance(value, (int, float)) for value in change_sources):
+            metrics["netChangeInCash"] = sum(float(value) for value in change_sources if isinstance(value, (int, float)))
+
+    if metrics.get("cashEndPeriod") is None and isinstance(metrics.get("cashBeginningPeriod"), (int, float)) and isinstance(metrics.get("netChangeInCash"), (int, float)):
+        metrics["cashEndPeriod"] = float(metrics["cashBeginningPeriod"]) + float(metrics["netChangeInCash"])
+
+    if metrics.get("cashBeginningPeriod") is None and isinstance(metrics.get("cashEndPeriod"), (int, float)) and isinstance(metrics.get("netChangeInCash"), (int, float)):
+        metrics["cashBeginningPeriod"] = float(metrics["cashEndPeriod"]) - float(metrics["netChangeInCash"])
+
+    if metrics.get("freeCashFlow") is None and isinstance(metrics.get("netCashFromOperations"), (int, float)) and isinstance(metrics.get("capitalExpenditures"), (int, float)):
+        capex = float(metrics["capitalExpenditures"])
+        metrics["freeCashFlow"] = float(metrics["netCashFromOperations"]) + capex if capex < 0 else float(metrics["netCashFromOperations"]) - capex
+
+    return metrics
+
+
+def _build_cash_flow_item(result: dict, parsed: dict, fallback_year: int) -> dict:
+    fiscal_year = int(result.get("Report_Year") or result.get("report_year") or fallback_year)
+    period = _normalize_period(result)
+    quarter = _fiscal_quarter(period)
+
+    return {
+        "period": period,
+        "fiscalYear": fiscal_year,
+        "fiscalQuarter": quarter,
+        "periodEndDate": _period_end_date(fiscal_year, quarter),
+        "currency": parsed.get("currency") or "IDR",
+        "auditStatus": _audit_status(period),
+        "netIncomeStart": parsed.get("netIncomeStart"),
+        "depreciationAmort": parsed.get("depreciationAmort"),
+        "stockBasedCompensation": parsed.get("stockBasedCompensation"),
+        "changeInWorkingCapital": parsed.get("changeInWorkingCapital"),
+        "changeInReceivables": parsed.get("changeInReceivables"),
+        "changeInInventory": parsed.get("changeInInventory"),
+        "changeInPayables": parsed.get("changeInPayables"),
+        "otherOperatingActivities": parsed.get("otherOperatingActivities"),
+        "netCashFromOperations": parsed.get("netCashFromOperations"),
+        "capitalExpenditures": parsed.get("capitalExpenditures"),
+        "acquisitions": parsed.get("acquisitions"),
+        "purchaseOfInvestments": parsed.get("purchaseOfInvestments"),
+        "saleOfInvestments": parsed.get("saleOfInvestments"),
+        "otherInvestingActivities": parsed.get("otherInvestingActivities"),
+        "netCashFromInvesting": parsed.get("netCashFromInvesting"),
+        "debtIssuance": parsed.get("debtIssuance"),
+        "debtRepayment": parsed.get("debtRepayment"),
+        "commonStockIssuance": parsed.get("commonStockIssuance"),
+        "commonStockRepurchase": parsed.get("commonStockRepurchase"),
+        "dividendsPaid": parsed.get("dividendsPaid"),
+        "otherFinancingActivities": parsed.get("otherFinancingActivities"),
+        "netCashFromFinancing": parsed.get("netCashFromFinancing"),
+        "netChangeInCash": parsed.get("netChangeInCash"),
+        "cashBeginningPeriod": parsed.get("cashBeginningPeriod"),
+        "cashEndPeriod": parsed.get("cashEndPeriod"),
+        "freeCashFlow": parsed.get("freeCashFlow"),
+    }
+
+
 def _sheet_quality_score(metrics: dict[str, Any]) -> float:
     core_fields = ["revenue", "operatingIncome", "pretaxIncome", "netIncome", "interestIncome", "interestExpense"]
     hits = sum(1 for key in core_fields if metrics.get(key) not in (None, 0))
@@ -641,10 +826,22 @@ def _balance_sheet_quality_score(metrics: dict[str, Any]) -> float:
     return hits * 1_000_000_000_000 + magnitude
 
 
-def _parse_workbook(content: bytes, year: int) -> tuple[dict[str, Any], dict[str, Any]]:
+def _cash_flow_quality_score(metrics: dict[str, Any]) -> float:
+    core_fields = ["netCashFromOperations", "netCashFromInvesting", "netCashFromFinancing", "netChangeInCash", "cashEndPeriod"]
+    hits = sum(1 for key in core_fields if metrics.get(key) not in (None, 0))
+    magnitude = 0.0
+    for key in ["netCashFromOperations", "netCashFromInvesting", "netCashFromFinancing", "netChangeInCash"]:
+        value = metrics.get(key)
+        if isinstance(value, (int, float)):
+            magnitude += abs(float(value))
+    return hits * 1_000_000_000_000 + magnitude
+
+
+def _parse_workbook(content: bytes, year: int) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     wb = load_workbook(filename=BytesIO(content), read_only=True, data_only=True)
     income_sheets = sorted(wb.worksheets, key=lambda s: _sheet_score(s.title), reverse=True)
     balance_sheets = sorted(wb.worksheets, key=lambda s: _balance_sheet_score(s.title), reverse=True)
+    cash_flow_sheets = sorted(wb.worksheets, key=lambda s: _cash_flow_sheet_score(s.title), reverse=True)
 
     merged_income = {field: None for field in NUMERIC_ALIASES.keys()}
     merged_income["revenueGrowthYoY"] = None
@@ -654,9 +851,12 @@ def _parse_workbook(content: bytes, year: int) -> tuple[dict[str, Any], dict[str
     merged_balance["bookValuePerShare"] = None
     merged_balance["netDebt"] = None
     merged_balance["workingCapital"] = None
+    merged_cash_flow = {field: None for field in CASH_FLOW_NUMERIC_ALIASES.keys()}
+    merged_cash_flow["currency"] = None
 
     income_results: list[dict[str, Any]] = []
     balance_results: list[dict[str, Any]] = []
+    cash_flow_results: list[dict[str, Any]] = []
 
     for sheet in income_sheets:
         rows = _normalize_rows(sheet)
@@ -684,6 +884,19 @@ def _parse_workbook(content: bytes, year: int) -> tuple[dict[str, Any], dict[str
             if current is None and value is not None:
                 merged_balance[key] = value
 
+    for sheet in cash_flow_sheets:
+        rows = _normalize_rows(sheet)
+        if not rows:
+            continue
+
+        sheet_metrics = _extract_cash_flow_metrics(rows, year)
+        cash_flow_results.append(sheet_metrics)
+
+        for key, value in sheet_metrics.items():
+            current = merged_cash_flow.get(key)
+            if current is None and value is not None:
+                merged_cash_flow[key] = value
+
     if income_results:
         best = max(income_results, key=_sheet_quality_score)
         for key, value in best.items():
@@ -696,6 +909,12 @@ def _parse_workbook(content: bytes, year: int) -> tuple[dict[str, Any], dict[str
             if value is not None:
                 merged_balance[key] = value
 
+    if cash_flow_results:
+        best = max(cash_flow_results, key=_cash_flow_quality_score)
+        for key, value in best.items():
+            if value is not None:
+                merged_cash_flow[key] = value
+
     # Use shares from income side when available for BVPS derivation.
     shares = merged_income.get("sharesWeightedAvg")
     if (
@@ -707,7 +926,7 @@ def _parse_workbook(content: bytes, year: int) -> tuple[dict[str, Any], dict[str
         merged_balance["bookValuePerShare"] = round(float(merged_balance["totalEquity"]) / float(shares), 4)
 
     wb.close()
-    return merged_income, merged_balance
+    return merged_income, merged_balance, merged_cash_flow
 
 
 def _build_statement_item(result: dict, parsed: dict, fallback_year: int) -> dict:
@@ -852,6 +1071,66 @@ def _normalize_monetary_scale(item: dict) -> dict:
     return item
 
 
+def _normalize_cash_flow_scale(item: dict) -> dict:
+    monetary_fields = [
+        "netIncomeStart",
+        "depreciationAmort",
+        "stockBasedCompensation",
+        "changeInWorkingCapital",
+        "changeInReceivables",
+        "changeInInventory",
+        "changeInPayables",
+        "otherOperatingActivities",
+        "netCashFromOperations",
+        "capitalExpenditures",
+        "acquisitions",
+        "purchaseOfInvestments",
+        "saleOfInvestments",
+        "otherInvestingActivities",
+        "netCashFromInvesting",
+        "debtIssuance",
+        "debtRepayment",
+        "commonStockIssuance",
+        "commonStockRepurchase",
+        "dividendsPaid",
+        "otherFinancingActivities",
+        "netCashFromFinancing",
+        "netChangeInCash",
+        "cashBeginningPeriod",
+        "cashEndPeriod",
+        "freeCashFlow",
+    ]
+
+    numeric_values = [
+        abs(float(item.get(field)))
+        for field in monetary_fields
+        if isinstance(item.get(field), (int, float)) and item.get(field) not in (None, 0)
+    ]
+    if not numeric_values:
+        return item
+
+    max_value = max(numeric_values)
+    reference_value = item.get("netCashFromOperations") if isinstance(item.get("netCashFromOperations"), (int, float)) else None
+
+    looks_like_millions = (
+        str(item.get("currency") or "").upper() == "IDR"
+        and max_value < 1_000_000_000
+        and (
+            max_value >= 1_000_000
+            or (reference_value is not None and 10_000 <= abs(float(reference_value)) < 1_000_000_000)
+        )
+    )
+    if not looks_like_millions:
+        return item
+
+    for field in monetary_fields:
+        value = item.get(field)
+        if isinstance(value, (int, float)):
+            item[field] = float(value) * 1_000_000
+
+    return item
+
+
 def _apply_bank_derivations(item: dict) -> dict:
     interest_income = item.get("interestIncome") if isinstance(item.get("interestIncome"), (int, float)) else None
     interest_expense = item.get("interestExpense") if isinstance(item.get("interestExpense"), (int, float)) else None
@@ -933,8 +1212,10 @@ def scrape_financial_statement(symbol: str, year: int) -> dict:
 
     income_items: list[dict] = []
     balance_items: list[dict] = []
+    cash_flow_items: list[dict] = []
     seen_income_period_year: set[tuple[str, int]] = set()
     seen_balance_period_year: set[tuple[str, int]] = set()
+    seen_cash_flow_period_year: set[tuple[str, int]] = set()
 
     for result, attachment in spreadsheets:
         file_name = str(attachment.get("File_Name") or attachment.get("file_name") or "")
@@ -944,7 +1225,7 @@ def scrape_financial_statement(symbol: str, year: int) -> dict:
 
         try:
             content = _download_file(file_url)
-            parsed_income, parsed_balance = _parse_workbook(content, year)
+            parsed_income, parsed_balance, parsed_cash_flow = _parse_workbook(content, year)
 
             income_item = _build_statement_item(result, parsed_income, fallback_year=year)
             income_item["period"] = _resolve_period(result, file_name)
@@ -957,6 +1238,12 @@ def scrape_financial_statement(symbol: str, year: int) -> dict:
             balance_item["fiscalQuarter"] = _fiscal_quarter(balance_item["period"])
             balance_item["periodEndDate"] = _period_end_date(int(balance_item["fiscalYear"]), balance_item["fiscalQuarter"])
             balance_item["auditStatus"] = _audit_status(balance_item["period"])
+
+            cash_flow_item = _build_cash_flow_item(result, parsed_cash_flow, fallback_year=year)
+            cash_flow_item["period"] = _resolve_period(result, file_name)
+            cash_flow_item["fiscalQuarter"] = _fiscal_quarter(cash_flow_item["period"])
+            cash_flow_item["periodEndDate"] = _period_end_date(int(cash_flow_item["fiscalYear"]), cash_flow_item["fiscalQuarter"])
+            cash_flow_item["auditStatus"] = _audit_status(cash_flow_item["period"])
         except Exception:
             continue
 
@@ -983,8 +1270,21 @@ def scrape_financial_statement(symbol: str, year: int) -> dict:
                 balance_item = _normalize_monetary_scale(balance_item)
                 balance_items.append(balance_item)
 
+        cash_flow_dedup_key = (str(cash_flow_item.get("period") or ""), int(cash_flow_item.get("fiscalYear") or year))
+        if cash_flow_dedup_key not in seen_cash_flow_period_year:
+            cash_flow_numeric_hits = sum(
+                1
+                for key in ["netCashFromOperations", "netCashFromInvesting", "netCashFromFinancing", "netChangeInCash", "cashEndPeriod"]
+                if cash_flow_item.get(key) not in (None, 0)
+            )
+            if cash_flow_numeric_hits > 0:
+                seen_cash_flow_period_year.add(cash_flow_dedup_key)
+                cash_flow_item = _normalize_cash_flow_scale(cash_flow_item)
+                cash_flow_items.append(cash_flow_item)
+
     income_items.sort(key=lambda row: (int(row.get("fiscalYear") or 0), int(row.get("fiscalQuarter") or 99)))
     balance_items.sort(key=lambda row: (int(row.get("fiscalYear") or 0), int(row.get("fiscalQuarter") or 99)))
+    cash_flow_items.sort(key=lambda row: (int(row.get("fiscalYear") or 0), int(row.get("fiscalQuarter") or 99)))
     return {
         "status": "ok",
         "symbol": symbol.upper(),
@@ -996,6 +1296,10 @@ def scrape_financial_statement(symbol: str, year: int) -> dict:
         "balance_sheet": {
             "count": len(balance_items),
             "items": balance_items,
+        },
+        "cash_flow_statement": {
+            "count": len(cash_flow_items),
+            "items": cash_flow_items,
         },
     }
 

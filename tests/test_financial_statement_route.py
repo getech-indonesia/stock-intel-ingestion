@@ -57,6 +57,34 @@ def _build_financial_statement_workbook() -> bytes:
     bs.append(["Retained Earnings", 620, 585])
     bs.append(["Total Equity", 800, 755])
 
+    cf = wb.create_sheet("Cash Flow Statement")
+    cf.append(["Metric", 2025, 2024])
+    cf.append(["Net Income", 500, 450])
+    cf.append(["Depreciation & Amortization", 60, 55])
+    cf.append(["Stock Based Compensation", 12, 10])
+    cf.append(["Change in Working Capital", -5, -4])
+    cf.append(["Change in Receivables", -10, -9])
+    cf.append(["Change in Inventory", -15, -12])
+    cf.append(["Change in Payables", 20, 17])
+    cf.append(["Other Operating Activities", 8, 7])
+    cf.append(["Net Cash From Operations", 570, 514])
+    cf.append(["Capital Expenditures", -80, -70])
+    cf.append(["Acquisitions", -20, 0])
+    cf.append(["Purchase Of Investments", -40, -30])
+    cf.append(["Sale Of Investments", 10, 8])
+    cf.append(["Other Investing Activities", 5, 4])
+    cf.append(["Net Cash From Investing", -125, -88])
+    cf.append(["Debt Issuance", 100, 90])
+    cf.append(["Debt Repayment", -60, -55])
+    cf.append(["Common Stock Issuance", 15, 12])
+    cf.append(["Common Stock Repurchase", -5, -4])
+    cf.append(["Dividends Paid", -30, -25])
+    cf.append(["Other Financing Activities", 2, 1])
+    cf.append(["Net Cash From Financing", 22, 19])
+    cf.append(["Net Change In Cash", 467, 445])
+    cf.append(["Cash Beginning Period", 100, 80])
+    cf.append(["Cash End Period", 567, 525])
+
     buffer = BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
@@ -101,6 +129,16 @@ def test_financial_statement_route_returns_payload(monkeypatch):
                     }
                 ],
             },
+            "cash_flow_statement": {
+                "count": 1,
+                "items": [
+                    {
+                        "period": "AUDIT",
+                        "fiscalYear": year,
+                        "netCashFromOperations": 570,
+                    }
+                ],
+            },
         }
 
     monkeypatch.setattr("app.routes.fetch_and_build_financial_statement", fake_fetch_and_build_financial_statement)
@@ -117,6 +155,8 @@ def test_financial_statement_route_returns_payload(monkeypatch):
     assert body["income_statement"]["items"][0]["revenue"] == 1000
     assert body["balance_sheet"]["count"] == 1
     assert body["balance_sheet"]["items"][0]["totalAssets"] == 1400
+    assert body["cash_flow_statement"]["count"] == 1
+    assert body["cash_flow_statement"]["items"][0]["netCashFromOperations"] == 570
 
 
 def test_scrape_financial_statement_extracts_values(monkeypatch):
@@ -151,6 +191,12 @@ def test_scrape_financial_statement_extracts_values(monkeypatch):
     assert balance_sheet["totalAssets"] == 1400
     assert balance_sheet["totalLiabilities"] == 600
     assert balance_sheet["totalEquity"] == 800
+    assert payload["cash_flow_statement"]["count"] == 1
+    cash_flow_statement = payload["cash_flow_statement"]["items"][0]
+    assert cash_flow_statement["netIncomeStart"] == 500
+    assert cash_flow_statement["depreciationAmort"] == 60
+    assert cash_flow_statement["netCashFromOperations"] == 570
+    assert cash_flow_statement["freeCashFlow"] == 490
 
 
 def test_scrape_financial_statement_splits_period_from_file_name(monkeypatch):
