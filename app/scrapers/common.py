@@ -52,19 +52,44 @@ def _get_json_cloudscraper(url: str, params: dict | None = None, headers: dict |
 
 
 def _get(url: str, params: dict, headers: dict | None = None) -> dict:
+    req_headers = headers or HEADERS
+    last_error: Exception | None = None
+
+    def _parse_json_response(response: requests.Response) -> dict:
+        response.raise_for_status()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            snippet = (response.text or "")[:200]
+            raise RuntimeError(
+                f"IDX API returned non-JSON response for {url}. status={response.status_code} body={snippet}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"IDX API returned non-object JSON for {url}")
+        return data
+
+    # 1) plain requests first (fast path for stable sessions/cookies).
     try:
-        scraper = _create_scraper()
-        response = scraper.get(url, params=params, headers=headers or HEADERS, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        return response.json()
-    except requests.HTTPError as exc:
-        raise RuntimeError(f"IDX API returned HTTP {exc.response.status_code} for {url}") from exc
-    except ValueError:
-        response = requests.get(url, params=params, headers=headers or HEADERS, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Request to IDX API failed: {exc}") from exc
+        response = requests.get(url, params=params, headers=req_headers, timeout=REQUEST_TIMEOUT)
+        return _parse_json_response(response)
+    except Exception as exc:
+        last_error = exc
+
+    # 2) cloudscraper current session.
+    try:
+        response = _get_idx_scraper().get(url, params=params, headers=req_headers, timeout=REQUEST_TIMEOUT)
+        return _parse_json_response(response)
+    except Exception as exc:
+        last_error = exc
+
+    # 3) cloudscraper with reset session as final fallback.
+    try:
+        response = _get_idx_scraper(reset=True).get(url, params=params, headers=req_headers, timeout=REQUEST_TIMEOUT)
+        return _parse_json_response(response)
+    except Exception as exc:
+        last_error = exc
+
+    raise RuntimeError(f"Request to IDX API failed for {url}: {last_error}") from last_error
 
 
 def _download_file(url: str) -> bytes:
