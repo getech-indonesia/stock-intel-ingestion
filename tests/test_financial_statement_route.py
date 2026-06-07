@@ -1,93 +1,44 @@
-from io import BytesIO
-
-from openpyxl import Workbook
-
 from app import create_app
 from app.scrapers import financial_statement as financial_statement_module
 
 
-def _build_financial_statement_workbook() -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Income Statement"
-
-    ws.append(["Metric", 2025, 2024])
-    ws.append(["Revenue", 1000, 900])
-    ws.append(["COGS", 400, 350])
-    ws.append(["Gross Profit", 600, 550])
-    ws.append(["Operating Expenses", 120, 110])
-    ws.append(["Selling Expenses", 40, 35])
-    ws.append(["General Admin Expenses", 30, 28])
-    ws.append(["R&D Expenses", 10, 9])
-    ws.append(["Depreciation & Amortization", 15, 14])
-    ws.append(["EBIT", 480, 440])
-    ws.append(["EBITDA", 495, 454])
-    ws.append(["Operating Income", 470, 430])
-    ws.append(["Interest Expense", 20, 18])
-    ws.append(["Interest Income", 5, 4])
-    ws.append(["Other Non Operating Income", 7, 6])
-    ws.append(["Pretax Income", 462, 422])
-    ws.append(["Income Tax Expense", 92, 84])
-    ws.append(["Effective Tax Rate", 19.91, 19.91])
-    ws.append(["Net Income", 370, 338])
-    ws.append(["Net Income Attributable", 360, 330])
-    ws.append(["Minority Interest", 10, 8])
-    ws.append(["EPS", 12.5, 11.2])
-    ws.append(["EPS Diluted", 12.2, 11.0])
-    ws.append(["Weighted Avg Shares", 300, 302])
-
-    bs = wb.create_sheet("Balance Sheet")
-    bs.append(["Metric", 2025, 2024])
-    bs.append(["Cash and Cash Equivalents", 200, 180])
-    bs.append(["Accounts Receivable", 120, 115])
-    bs.append(["Inventory", 80, 70])
-    bs.append(["Total Current Assets", 500, 460])
-    bs.append(["Property Plant Equipment", 700, 680])
-    bs.append(["Intangible Assets", 50, 45])
-    bs.append(["Total Non Current Assets", 900, 870])
-    bs.append(["Total Assets", 1400, 1330])
-    bs.append(["Short Term Debt", 90, 88])
-    bs.append(["Accounts Payable", 110, 102])
-    bs.append(["Total Current Liabilities", 300, 280])
-    bs.append(["Long Term Debt", 250, 245])
-    bs.append(["Total Non Current Liabilities", 300, 295])
-    bs.append(["Total Liabilities", 600, 575])
-    bs.append(["Common Stock", 100, 100])
-    bs.append(["Additional Paid In Capital", 50, 50])
-    bs.append(["Retained Earnings", 620, 585])
-    bs.append(["Total Equity", 800, 755])
-
-    cf = wb.create_sheet("Cash Flow Statement")
-    cf.append(["Metric", 2025, 2024])
-    cf.append(["Net Income", 500, 450])
-    cf.append(["Depreciation & Amortization", 60, 55])
-    cf.append(["Stock Based Compensation", 12, 10])
-    cf.append(["Change in Working Capital", -5, -4])
-    cf.append(["Change in Receivables", -10, -9])
-    cf.append(["Change in Inventory", -15, -12])
-    cf.append(["Change in Payables", 20, 17])
-    cf.append(["Other Operating Activities", 8, 7])
-    cf.append(["Net Cash From Operations", 570, 514])
-    cf.append(["Capital Expenditures", -80, -70])
-    cf.append(["Acquisitions", -20, 0])
-    cf.append(["Purchase Of Investments", -40, -30])
-    cf.append(["Sale Of Investments", 10, 8])
-    cf.append(["Other Investing Activities", 5, 4])
-    cf.append(["Net Cash From Investing", -125, -88])
-    cf.append(["Debt Issuance", 100, 90])
-    cf.append(["Debt Repayment", -60, -55])
-    cf.append(["Common Stock Issuance", 15, 12])
-    cf.append(["Common Stock Repurchase", -5, -4])
-    cf.append(["Dividends Paid", -30, -25])
-    cf.append(["Other Financing Activities", 2, 1])
-    cf.append(["Net Cash From Financing", 22, 19])
-    cf.append(["Net Change In Cash", 467, 445])
-    cf.append(["Cash Beginning Period", 100, 80])
-    cf.append(["Cash End Period", 567, 525])
-
-    buffer = BytesIO()
-    wb.save(buffer)
-    return buffer.getvalue()
+def _build_financial_statement_pdf_text() -> str:
+    return """
+PT BANK CENTRAL ASIA Tbk DAN ENTITAS ANAK/AND SUBSIDIARIES
+LAPORAN POSISI KEUANGAN KONSOLIDASIAN
+31 MARET 2025 (TIDAK DIAUDIT)
+DAN 31 DESEMBER 2024 (DIAUDIT)
+(Dalam jutaan Rupiah, kecuali dinyatakan lain)
+Catatan/Notes   31 Maret/March 2025   31 Desember/December 2024
+Kas   28.032.494   29.315.878   Cash
+Giro pada Bank Indonesia   56.182.969   36.408.142   Current accounts with Bank Indonesia
+Penempatan pada Bank Indonesia dan bank-bank lain   25.277.033   15.714.884   Placements with Bank Indonesia and other banks
+Jumlah aset   1.533.763.445   1.449.301.328   Total assets
+Jumlah liabilitas   1.278.027.110   1.177.403.108   Total liabilities
+Jumlah ekuitas   246.520.509   262.835.087   Total equity
+LAPORAN LABA RUGI DAN PENGHASILAN KOMPREHENSIF LAIN KONSOLIDASIAN
+31 MARET 2025 DAN 31 MARET 2024
+Catatan/Notes   31 Maret/March 2025   31 Maret/March 2024
+Pendapatan bunga dan syariah   24.366.718   22.963.761
+Pendapatan bunga dan syariah - bersih   21.118.560   19.766.457
+Pendapatan operasional lainnya   7.005.767   6.451.724
+Beban operasional lainnya   (9.637.633)   (9.416.692)
+Laba sebelum pajak penghasilan   17.455.662   15.915.029
+Beban pajak penghasilan   (3.308.672)   (3.036.522)
+Laba bersih   14.146.990   12.878.507
+Laba bersih yang dapat diatribusikan kepada pemilik entitas induk   14.146.131   12.879.486
+Kepentingan non-pengendali   859   (979)
+Laba bersih per saham dasar dan dilusian   115   104
+LAPORAN ARUS KAS KONSOLIDASIAN
+31 MARET 2025 DAN 31 MARET 2024
+Catatan/Notes   31 Maret/March 2025   31 Maret/March 2024
+Kas bersih yang diperoleh dari aktivitas operasi   35.183.351   29.921.610
+Kas bersih yang digunakan untuk aktivitas investasi   (25.981.888)   (10.570.212)
+Kas bersih yang digunakan untuk aktivitas pendanaan   (9.307.341)   (22.412.010)
+Kenaikan (penurunan) bersih kas dan setara kas   (105.878)   (3.060.612)
+Kas dan setara kas pada awal periode   33.254.736   30.256.343
+Kas dan setara kas pada akhir periode   33.148.858   27.195.731
+""".strip()
 
 
 def test_financial_statement_route_requires_symbol_and_year():
@@ -160,61 +111,65 @@ def test_financial_statement_route_returns_payload(monkeypatch):
 
 
 def test_scrape_financial_statement_extracts_values(monkeypatch):
-    workbook_bytes = _build_financial_statement_workbook()
+    pdf_text = _build_financial_statement_pdf_text()
 
     monkeypatch.setattr(financial_statement_module, "fetch_financial_report_results", lambda symbol, year: [
         {
-            "Report_Period": "Audit",
+            "Report_Period": "TW1",
             "Report_Year": str(year),
             "Attachments": [
                 {
-                    "File_Name": "FinancialStatement-2025-Tahunan-BBRI.xlsx",
-                    "File_Path": "/fake/report.xlsx",
-                    "File_Type": ".xlsx",
+                    "File_Name": "FinancialStatement-2025-I-BBRI.pdf",
+                    "File_Path": "/fake/report.pdf",
+                    "File_Type": ".pdf",
                 }
             ],
         }
     ])
-    monkeypatch.setattr(financial_statement_module, "_download_file", lambda url: workbook_bytes)
+    monkeypatch.setattr(financial_statement_module, "_download_file", lambda url: b"%PDF-1.4 fake bytes")
+    monkeypatch.setattr(financial_statement_module, "_extract_attachment_text", lambda file_name, content: pdf_text)
 
     payload = financial_statement_module.scrape_financial_statement("bbri", 2025)
 
     assert payload["income_statement"]["count"] == 1
     statement = payload["income_statement"]["items"][0]
-    assert statement["revenue"] == 1000
-    assert statement["grossProfit"] == 600
-    assert statement["netIncome"] == 370
-    assert statement["eps"] == 12.5
-    assert statement["period"] == "AUDIT"
+    assert statement["revenue"] == 24366718000000
+    assert statement["operatingIncome"] == 21118560000000
+    assert statement["netIncome"] == 14146990000000
+    assert statement["eps"] == 115
+    assert statement["period"] == "Q1"
     assert payload["balance_sheet"]["count"] == 1
     balance_sheet = payload["balance_sheet"]["items"][0]
-    assert balance_sheet["totalAssets"] == 1400
-    assert balance_sheet["totalLiabilities"] == 600
-    assert balance_sheet["totalEquity"] == 800
+    assert balance_sheet["cash"] == 28032494000000
+    assert balance_sheet["shortTermInvestments"] == 56182969000000
+    assert balance_sheet["totalAssets"] == 1533763445000000
+    assert balance_sheet["totalLiabilities"] == 1278027110000000
+    assert balance_sheet["totalEquity"] == 246520509000000
     assert payload["cash_flow_statement"]["count"] == 1
     cash_flow_statement = payload["cash_flow_statement"]["items"][0]
-    assert cash_flow_statement["netIncomeStart"] == 500
-    assert cash_flow_statement["depreciationAmort"] == 60
-    assert cash_flow_statement["netCashFromOperations"] == 570
-    assert cash_flow_statement["freeCashFlow"] == 490
+    assert cash_flow_statement["netCashFromOperations"] == 35183351000000
+    assert cash_flow_statement["netCashFromInvesting"] == -25981888000000
+    assert cash_flow_statement["netCashFromFinancing"] == -9307341000000
+    assert cash_flow_statement["freeCashFlow"] is None
 
 
 def test_scrape_financial_statement_splits_period_from_file_name(monkeypatch):
-    workbook_bytes = _build_financial_statement_workbook()
+    pdf_text = _build_financial_statement_pdf_text()
 
     monkeypatch.setattr(financial_statement_module, "fetch_financial_report_results", lambda symbol, year: [
         {
             "Report_Period": "Audit",
             "Report_Year": str(year),
             "Attachments": [
-                {"File_Name": "FinancialStatement-2025-Tahunan-BBCA.xlsx", "File_Path": "/fake/audit.xlsx", "File_Type": ".xlsx"},
-                {"File_Name": "FinancialStatement-2025-I-BBCA.xlsx", "File_Path": "/fake/q1.xlsx", "File_Type": ".xlsx"},
-                {"File_Name": "FinancialStatement-2025-II-BBCA.xlsx", "File_Path": "/fake/q2.xlsx", "File_Type": ".xlsx"},
-                {"File_Name": "FinancialStatement-2025-III-BBCA.xlsx", "File_Path": "/fake/q3.xlsx", "File_Type": ".xlsx"},
+                {"File_Name": "Laporan Keuangan 2025 Tahunan BBCA.pdf", "File_Path": "/fake/audit.pdf", "File_Type": ".pdf"},
+                {"File_Name": "FinancialStatement-2025-I-BBCA.pdf", "File_Path": "/fake/q1.pdf", "File_Type": ".pdf"},
+                {"File_Name": "FinancialStatement-2025-II-BBCA.pdf", "File_Path": "/fake/q2.pdf", "File_Type": ".pdf"},
+                {"File_Name": "FS BBCA 2025 III.pdf", "File_Path": "/fake/q3.pdf", "File_Type": ".pdf"},
             ],
         }
     ])
-    monkeypatch.setattr(financial_statement_module, "_download_file", lambda url: workbook_bytes)
+    monkeypatch.setattr(financial_statement_module, "_download_file", lambda url: b"%PDF-1.4 fake bytes")
+    monkeypatch.setattr(financial_statement_module, "_extract_attachment_text", lambda file_name, content: pdf_text)
 
     payload = financial_statement_module.scrape_financial_statement("bbca", 2025)
 

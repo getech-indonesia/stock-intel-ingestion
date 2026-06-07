@@ -6,341 +6,46 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from app.scrapers.common import BASE_URL, _download_file, _get
+from app.scrapers.common import BASE_URL, _download_file, _extract_attachment_text, _get
 
 
-SUPPORTED_EXTENSIONS = {".xlsx", ".xls"}
-MAX_ATTACHMENTS_TO_PARSE = 20
+from app.scrapers.fs_utilities.fs_utils import (
+    SUPPORTED_EXTENSIONS,
+    MAX_ATTACHMENTS_TO_PARSE,
+    NUMERIC_ALIASES,
+    BALANCE_NUMERIC_ALIASES,
+    CASH_FLOW_NUMERIC_ALIASES,
+    FIELD_BLOCKED_TOKENS,
+    TEXT_BLOCKLIST,
+    _normalize_text,
+    _normalize_file_extension,
+    _to_number,
+    _detect_unit_multiplier,
+    _to_ratio,
+    _attachment_url,
+    _score_attachment,
+    _is_spreadsheet_attachment,
+    _extract_currency,
+    _normalize_text_lines,
+    _text_to_rows,
+    _normalize_period,
+    _period_from_file_name,
+    _resolve_period,
+    _fiscal_quarter,
+    _period_end_date,
+    _audit_status,
+)
 
-NUMERIC_ALIASES = {
-    "revenue": [
-        "jumlahpendapatanoperasional",
-        "totalpendapatanoperasional",
-        "pendapatanoperasional",
-        "revenue",
-        "pendapatan",
-        "penjualan",
-        "sales",
-        "totalrevenue",
-        "netsales",
-    ],
-    "cogs": ["cogs", "costofgoodsold", "costofsales", "costofrevenue", "bebanpokokpenjualan", "bebanpokok"],
-    "grossProfit": ["grossprofit", "labakotor"],
-    "operatingExpenses": ["operatingexpenses", "operatingexpense", "bebanoperasional", "bebanoperasi"],
-    "sellingExpenses": ["sellingexpenses", "bebanpenjualan"],
-    "generalAdminExpenses": ["generaladminexpenses", "generaladministrativeexpenses", "bebanumumdanadministrasi", "bebanadministrasi"],
-    "rdExpenses": ["rdexpenses", "researchdevelopmentexpenses", "researchanddevelopment"],
-    "depreciationAmort": ["depreciationamort", "depreciationandamortization", "depreciationamortization", "penyusutandanamortisasi"],
-    "ebit": ["ebit", "earningbeforeinterestandtax"],
-    "ebitda": ["ebitda"],
-    "operatingIncome": ["operatingincome", "operatingprofit", "labaoperasional", "labaoperasi", "labausaha"],
-    "interestExpense": ["interestexpense", "bebanbunga", "financecost"],
-    "interestIncome": ["interestincome", "pendapatanbunga"],
-    "otherNonOperatingIncome": ["othernonoperatingincome", "otherincome", "nonoperatingincome", "pendapatanlainlain"],
-    "pretaxIncome": ["pretaxincome", "profitbeforetax", "incomebeforetax", "labasebelumpajak"],
-    "incomeTaxExpense": [
-        "bebanpajakpenghasilan",
-        "manfaatbebanpajakpenghasilan",
-        "incometaxexpense",
-        "taxexpense",
-    ],
-    "effectiveTaxRate": ["effectivetaxrate", "taxrate", "tarifpajakefektif"],
-    "netIncome": ["netincome", "netprofit", "lababersih", "labaperiodeberjalan", "jumlahlaba"],
-    "netIncomeAttributable": [
-        "netincomeattributable",
-        "attributabletoowners",
-        "labaatribusikepadapemilikentitasinduk",
-        "labarugiyangdapatdiatribusikankepadapemilikentitasinduk",
-        "labayangdapatdiatribusikankepadapemilikentitasinduk",
-    ],
-    "minorityInterest": ["minorityinterest", "noncontrollinginterest", "kepentingannonpengendali"],
-    "eps": ["eps", "earningpershare", "labapersahamdasar"],
-    "epsDiluted": ["epsdiluted", "dilutedeps", "labapersahamdilusian"],
-    "sharesWeightedAvg": ["weightedaverageshares", "sharesweightedavg", "rataratasahamberedartertimbang"],
-}
+from app.scrapers.fs_utilities.fs_collectors import fetch_financial_report_results, _collect_pdf_attachments, _collect_spreadsheet_attachments
 
-BALANCE_NUMERIC_ALIASES = {
-    "cash": ["cash", "kasdansetarakas", "kasdanbank", "cashandcashequivalents"],
-    "shortTermInvestments": ["shortterminvestments", "investasijangkapendek", "marketablesecurities"],
-    "accountsReceivable": ["accountsreceivable", "piutangusaha", "tradeandotherreceivables"],
-    "inventory": ["inventory", "persediaan"],
-    "otherCurrentAssets": ["othercurrentassets", "asetlancarlainnya", "asetlancarllain"],
-    "totalCurrentAssets": ["totalcurrentassets", "jumlahasetlancar", "asetlancar"],
-    "propertyPlantEquipment": ["propertyplantequipment", "asettetap", "fixedassets"],
-    "intangibleAssets": ["intangibleassets", "asettakberwujud", "asettidakberwujud"],
-    "goodwill": ["goodwill"],
-    "longTermInvestments": ["longterminvestments", "investasijangkapanjang"],
-    "otherNonCurrentAssets": ["othernoncurrentassets", "asettidaklancarlainnya", "asetnonlancarlainnya"],
-    "totalNonCurrentAssets": ["totalnoncurrentassets", "jumlahasettidaklancar", "asettidaklancar"],
-    "totalAssets": ["totalassets", "jumlahaset", "totalaset"],
-    "shortTermDebt": ["shorttermdebt", "utangjangkapendek", "pinjamanjangkapendek", "liabilitasjangkapendekberbunga"],
-    "accountsPayable": ["accountspayable", "utangusaha", "tradepayables"],
-    "deferredRevenue": ["deferredrevenue", "pendapatanditerimadimuka"],
-    "otherCurrentLiabilities": ["othercurrentliabilities", "liabilitaslancarlainnya", "utanglancarlainnya"],
-    "totalCurrentLiabilities": ["totalcurrentliabilities", "jumlahlibilitaslancar", "liabilitaslancar"],
-    "longTermDebt": ["longtermdebt", "utangjangkapanjang", "pinjamanjangkapanjang", "liabilitasjangkapanjangberbunga"],
-    "deferredTaxLiabilities": ["deferredtaxliabilities", "liabilitaspajaktangguhan"],
-    "otherNonCurrentLiabilities": ["othernoncurrentliabilities", "liabilitasjangkapanjanglainnya", "liabilitasnonlancarlainnya"],
-    "totalNonCurrentLiabilities": ["totalnoncurrentliabilities", "jumlahliabilitasjangkapanjang", "liabilitasnonlancar"],
-    "totalLiabilities": ["totalliabilities", "jumlahliabilitas", "totalliabilitas"],
-    "commonStock": ["commonstock", "modaldisetor", "modal saham", "issuedandfullypaidcapital"],
-    "additionalPaidInCapital": ["additionalpaidincapital", "tambahanmodaldisetor", "agio"],
-    "retainedEarnings": ["retainedearnings", "saldo laba", "labaditahan"],
-    "treasuryStock": ["treasurystock", "sahamtreasury", "sahamdiperoleh kembali"],
-    "otherEquity": ["otherequity", "ekuitaslainnya"],
-    "minorityInterestEquity": ["minorityinterestequity", "kepentingannonpengendali", "noncontrollinginterest"],
-    "totalEquity": ["totalequity", "jumlahekuitas", "totalekuitas"],
-}
-
-CASH_FLOW_NUMERIC_ALIASES = {
-    "netIncomeStart": ["netincome", "profitfortheperiod", "profitfortheyear", "lababersih", "labaperiodiberjalan"],
-    "depreciationAmort": ["depreciationamort", "depreciationandamortization", "depreciationamortization", "penyusutandanamortisasi"],
-    "stockBasedCompensation": ["stockbasedcompensation", "sharebasedcompensation", "sharebasedpayment", "kompensasisaham", "pembayaranberbasissaham"],
-    "changeInWorkingCapital": ["changeinworkingcapital", "changesinworkingcapital", "perubahanmodalkerja"],
-    "changeInReceivables": ["changeinreceivables", "changesinreceivables", "changeintradeandotherreceivables", "perubahanpiutang"],
-    "changeInInventory": ["changeininventory", "changesininventory", "perubahanpersediaan"],
-    "changeInPayables": ["changeinpayables", "changesinpayables", "changeintradepayables", "perubahanutangusaha"],
-    "otherOperatingActivities": ["otheroperatingactivities", "otheroperatingcashflows", "activitiessetelahtax", "aktivitasoperasilainnya"],
-    "netCashFromOperations": [
-        "netcashfromoperations",
-        "netcashfromoperatingactivities",
-        "netcashprovidedbyoperatingactivities",
-        "aruskasbersihdariaktivitasoperasi",
-    ],
-    "capitalExpenditures": [
-        "capitalexpenditures",
-        "capex",
-        "purchaseofpropertyplantandequipment",
-        "purchaseofppe",
-        "pembelianaset tetap",
-        "pembelianpropertyplantandequipment",
-    ],
-    "acquisitions": ["acquisitions", "acquisitionofsubsidiaries", "akuisisi"],
-    "purchaseOfInvestments": ["purchaseofinvestments", "purchaseofmarketablesecurities", "pembelianinvestasi"],
-    "saleOfInvestments": ["saleofinvestments", "proceedsfromsaleofinvestments", "penjualaninvestasi"],
-    "otherInvestingActivities": ["otherinvestingactivities", "otherinvestingcashflows", "aktivitasinvestasilainnya"],
-    "netCashFromInvesting": [
-        "netcashfrominvesting",
-        "netcashfrominvestingactivities",
-        "netcashusedininvestingactivities",
-        "aruskasbersihdariaktivitasinvestasi",
-    ],
-    "debtIssuance": ["debtissuance", "proceedsfromdebt", "proceedsfromborrowings", "penerimaanpinjaman"],
-    "debtRepayment": ["debtrepayment", "repaymentofdebt", "paymentofborrowings", "pelunasanpinjaman"],
-    "commonStockIssuance": ["commonstockissuance", "issuanceofcommonstock", "proceedsfromissuanceofshares", "penerbitansaham"],
-    "commonStockRepurchase": ["commonstockrepurchase", "repurchaseofcommonstock", "treasurystockpurchase", "pembeliankembalisaham"],
-    "dividendsPaid": ["dividendspaid", "paymentofdividends", "dividendspaidtoshareholders", "dividendibayar"],
-    "otherFinancingActivities": ["otherfinancingactivities", "otherfinancingcashflows", "aktivitaspendanaanlainnya"],
-    "netCashFromFinancing": [
-        "netcashfromfinancing",
-        "netcashfromfinancingactivities",
-        "netcashprovidedbyfinancingactivities",
-        "aruskasbersihdariaktivitaspendanaan",
-    ],
-    "netChangeInCash": [
-        "netchangeincash",
-        "netincreaseindcashandcashequivalents",
-        "netincreasedecreaseincash",
-        "perubahanbersihkas",
-    ],
-    "cashBeginningPeriod": [
-        "cashbeginningperiod",
-        "cashandcashequivalentsatthebeginningoftheperiod",
-        "cashatthebeginningoftheperiod",
-        "kasawaltahun",
-        "kasawalperiode",
-    ],
-    "cashEndPeriod": [
-        "cashendperiod",
-        "cashandcashequivalentsattheendoftheperiod",
-        "cashattheendoftheperiod",
-        "kasakhirtahun",
-        "kasakhirperiode",
-    ],
-    "freeCashFlow": ["freecashflow", "freecashflowfcf", "fcf"],
-}
-
-FIELD_BLOCKED_TOKENS = {
-    "incomeTaxExpense": ["sebelumpajak", "beforetax"],
-}
-
-TEXT_BLOCKLIST = [
-    "komprehensif lain",
-    "catatan",
-    "note",
-    "explanation",
-    "penjelasan",
-    "change in name",
-]
-
-
-def _normalize_text(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    return "".join(ch for ch in text if ch.isalnum())
-
-
-def _normalize_file_extension(file_name: str, file_type: str | None = None) -> str:
-    ext = str(file_type or "").strip().lower()
-    if ext and not ext.startswith("."):
-        ext = f".{ext}"
-    if ext in SUPPORTED_EXTENSIONS:
-        return ext
-
-    lower_name = str(file_name or "").lower()
-    if "." in lower_name:
-        guessed = f".{lower_name.rsplit('.', 1)[-1]}"
-        if guessed in SUPPORTED_EXTENSIONS:
-            return guessed
-    return ""
-
-
-def _to_number(value: Any):
-    if value in (None, ""):
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    text = str(value).strip()
-    if not text:
-        return None
-
-    # Guard against narrative/text paragraphs being parsed as numbers.
-    if len(text) > 64 and not re.search(r"\d", text):
-        return None
-
-    negative = text.startswith("(") and text.endswith(")")
-    text = text.replace("(", "").replace(")", "")
-
-    text = text.replace(" ", "")
-    text = text.replace("Rp", "").replace("IDR", "").replace("idr", "")
-    text = text.replace("USD", "").replace("usd", "")
-    text = text.replace("%", "")
-
-    multiplier = 1
-    lower_text = text.lower()
-    if "triliun" in lower_text:
-        multiplier = 1_000_000_000_000
-    elif "miliar" in lower_text:
-        multiplier = 1_000_000_000
-    elif "juta" in lower_text:
-        multiplier = 1_000_000
-
-    text = re.sub(r"[^0-9,.-]", "", text)
-    if not text or text in {"-", ".", ","}:
-        return None
-
-    if "," in text and "." in text:
-        text = text.replace(".", "").replace(",", ".")
-    elif text.count(",") > 1 and "." not in text:
-        text = text.replace(",", "")
-    elif text.count(".") > 1 and "," not in text:
-        text = text.replace(".", "")
-    elif "," in text:
-        tail = text.split(",")[-1]
-        if len(tail) == 3 and text.replace(",", "").replace("-", "").isdigit():
-            text = text.replace(",", "")
-        else:
-            text = text.replace(",", ".")
-
-    try:
-        number = float(text) * multiplier
-    except ValueError:
-        return None
-
-    if negative:
-        number = -number
-
-    return number
-
-
-def _detect_unit_multiplier(rows: list[list[Any]]) -> float:
-    for row in rows[:100]:
-        for cell in row[:20]:
-            text = str(cell or "").strip().lower()
-            if not text:
-                continue
-            if "dalam jutaan" in text:
-                return 1_000_000.0
-            if "dalam miliaran" in text or "dalam miliar" in text:
-                return 1_000_000_000.0
-            if "dalam ribuan" in text:
-                return 1_000.0
-            if "dalam triliunan" in text or "dalam triliun" in text:
-                return 1_000_000_000_000.0
-            if "million" in text and "rupiah" in text:
-                return 1_000_000.0
-            if "billion" in text and "rupiah" in text:
-                return 1_000_000_000.0
-    return 1.0
-
-
-def _to_ratio(value: Any):
-    number = _to_number(value)
-    if number is None:
-        return None
-    if abs(number) > 1:
-        return round(number / 100.0, 6)
-    return round(number, 6)
-
-
-def _attachment_url(attachment: dict) -> str:
-    file_path = str(attachment.get("File_Path") or attachment.get("file_path") or "").strip()
-    if not file_path:
-        return ""
-    if file_path.startswith("http"):
-        return file_path
-    return f"{BASE_URL}{file_path}"
-
-
-def _score_attachment(attachment: dict) -> int:
-    file_name = str(attachment.get("File_Name") or attachment.get("file_name") or "").lower()
-    score = 0
-    for keyword in ["financialstatement", "financial statement", "laporankeuangan", "laporan keuangan", "laba rugi", "income statement"]:
-        if keyword in file_name:
-            score += 4
-    if file_name.endswith(".xlsx"):
-        score += 2
-    if "xbrl" in file_name:
-        score += 1
-    return score
-
-
-def _is_spreadsheet_attachment(attachment: dict) -> bool:
-    file_name = str(attachment.get("File_Name") or attachment.get("file_name") or "")
-    file_type = str(attachment.get("File_Type") or attachment.get("file_type") or "")
-    ext = _normalize_file_extension(file_name, file_type)
-    return ext in SUPPORTED_EXTENSIONS
-
-
-def fetch_financial_report_results(symbol: str, year: int) -> list[dict]:
-    url = f"{BASE_URL}/primary/ListedCompany/GetFinancialReport"
-    params = {
-        "periode": "*",
-        "year": str(year),
-        "indexFrom": 0,
-        "pageSize": 1000,
-        "reportType": "rdf",
-        "kodeEmiten": symbol.upper(),
-    }
-    response_data = _get(url, params)
-    results = response_data.get("Results") or response_data.get("results") or []
-    return results if isinstance(results, list) else []
-
-
-def _collect_spreadsheet_attachments(results: list[dict]) -> list[tuple[dict, dict]]:
-    collected: list[tuple[dict, dict]] = []
-    for result in results:
-        attachments = result.get("Attachments") or result.get("attachments") or []
-        if not isinstance(attachments, list):
-            continue
-        for attachment in attachments:
-            if isinstance(attachment, dict) and _is_spreadsheet_attachment(attachment):
-                collected.append((result, attachment))
-
-    collected.sort(key=lambda item: _score_attachment(item[1]), reverse=True)
-    return collected[:MAX_ATTACHMENTS_TO_PARSE]
+from app.scrapers.fs_utilities.fs_builders import (
+    _build_statement_item,
+    _build_balance_sheet_item,
+    _build_cash_flow_item,
+    _normalize_monetary_scale,
+    _normalize_cash_flow_scale,
+    _apply_bank_derivations,
+)
 
 
 def _sheet_score(sheet_name: str) -> int:
@@ -398,7 +103,7 @@ def _find_year_columns(rows: list[list[Any]], year: int) -> dict[int, int]:
 
 def _row_matches_alias(row: list[Any], aliases: list[str]) -> tuple[int, str] | None:
     normalized_aliases = [_normalize_text(alias) for alias in aliases]
-    for index, cell in enumerate(row[:4]):
+    for index, cell in enumerate(row[:6]):
         normalized_cell = _normalize_text(cell)
         if not normalized_cell:
             continue
@@ -417,13 +122,23 @@ def _extract_numeric_value(row: list[Any], label_index: int, year_col: int | Non
         candidates.append(row[year_col])
 
     # Fallback to cells right to the label, usually where values are placed.
-    for i in range(label_index + 1, min(len(row), label_index + 6)):
+    for i in range(label_index + 1, min(len(row), label_index + 10)):
         candidates.append(row[i])
 
     for candidate in candidates:
         number = _to_number(candidate)
         if number is not None:
             return number * unit_multiplier
+
+        if isinstance(candidate, str):
+            number_tokens = re.findall(r"\(?-?(?:\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)\)?", candidate)
+            for token in number_tokens:
+                bare_token = re.sub(r"\D", "", token)
+                if len(bare_token) <= 2 and token.replace("-", "").replace("(", "").replace(")", "").isdigit():
+                    continue
+                number = _to_number(token)
+                if number is not None:
+                    return number * unit_multiplier
 
     return None
 
@@ -463,6 +178,96 @@ def _extract_currency(rows: list[list[Any]]):
             if "usd" in text or "dollar" in text:
                 return "USD"
     return None
+
+
+def _normalize_text_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in str(text or "").splitlines():
+        line = " ".join(str(raw_line).replace("\u00a0", " ").split())
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _text_to_rows(text: str) -> list[list[Any]]:
+    rows: list[list[Any]] = []
+    for raw_line in str(text or "").splitlines():
+        line = str(raw_line).replace("\u00a0", " ").strip()
+        if not line:
+            continue
+        cells = [part.strip() for part in re.split(r"\t+|\s{2,}", line) if part.strip()]
+        rows.append(cells or [line])
+    return rows
+
+
+def _looks_like_balance_heading(line: str) -> bool:
+    lower = line.lower()
+    return any(
+        keyword in lower
+        for keyword in [
+            "laporan posisi keuangan",
+            "financial position",
+            "statements of financial position",
+        ]
+    )
+
+
+def _looks_like_income_heading(line: str) -> bool:
+    lower = line.lower()
+    return any(
+        keyword in lower
+        for keyword in [
+            "laporan laba rugi",
+            "profit or loss",
+            "income and other comprehensive income",
+            "penghasilan komprehensif",
+        ]
+    )
+
+
+def _looks_like_cash_flow_heading(line: str) -> bool:
+    lower = line.lower()
+    return any(keyword in lower for keyword in ["laporan arus kas", "cash flows"])
+
+
+def _looks_like_equity_heading(line: str) -> bool:
+    lower = line.lower()
+    return any(keyword in lower for keyword in ["laporan perubahan ekuitas", "changes in equity"])
+
+
+def _split_pdf_sections(text: str) -> dict[str, str]:
+    sections: dict[str, list[str]] = {"balance": [], "income": [], "cash_flow": []}
+    current_section: str | None = None
+
+    for raw_line in str(text or "").splitlines():
+        line = str(raw_line).replace("\u00a0", " ").strip()
+        if not line:
+            continue
+        normalized = " ".join(line.split())
+
+        if _looks_like_equity_heading(normalized):
+            current_section = None
+            continue
+        if _looks_like_balance_heading(normalized):
+            current_section = "balance"
+            continue
+        if _looks_like_income_heading(normalized):
+            current_section = "income"
+            continue
+        if _looks_like_cash_flow_heading(normalized):
+            current_section = "cash_flow"
+            continue
+
+        if current_section:
+            sections[current_section].append(line)
+
+    # Fallback to the full document if a section is missing so we still try to parse something.
+    full_text = "\n".join(str(raw_line).replace("\u00a0", " ").strip() for raw_line in str(text or "").splitlines() if str(raw_line).strip())
+    return {
+        "balance": "\n".join(sections["balance"]) or full_text,
+        "income": "\n".join(sections["income"]) or full_text,
+        "cash_flow": "\n".join(sections["cash_flow"]) or full_text,
+    }
 
 
 def _normalize_period(result: dict) -> str:
@@ -1206,9 +1011,22 @@ def _apply_bank_derivations(item: dict) -> dict:
     return item
 
 
+def _parse_report_attachment(content: bytes, file_name: str, year: int) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    ext = _normalize_file_extension(file_name)
+    if ext == ".pdf":
+        extracted_text = _extract_attachment_text(file_name, content)
+        section_text = _split_pdf_sections(extracted_text)
+        parsed_income = _extract_sheet_metrics(_text_to_rows(section_text["income"]), year)
+        parsed_balance = _extract_balance_metrics(_text_to_rows(section_text["balance"]), year)
+        parsed_cash_flow = _extract_cash_flow_metrics(_text_to_rows(section_text["cash_flow"]), year)
+        return parsed_income, parsed_balance, parsed_cash_flow
+
+    return _parse_workbook(content, year)
+
+
 def scrape_financial_statement(symbol: str, year: int) -> dict:
     results = fetch_financial_report_results(symbol, year)
-    spreadsheets = _collect_spreadsheet_attachments(results)
+    report_attachments = _collect_pdf_attachments(results)
 
     income_items: list[dict] = []
     balance_items: list[dict] = []
@@ -1217,7 +1035,7 @@ def scrape_financial_statement(symbol: str, year: int) -> dict:
     seen_balance_period_year: set[tuple[str, int]] = set()
     seen_cash_flow_period_year: set[tuple[str, int]] = set()
 
-    for result, attachment in spreadsheets:
+    for result, attachment in report_attachments:
         file_name = str(attachment.get("File_Name") or attachment.get("file_name") or "")
         file_url = _attachment_url(attachment)
         if not file_url:
@@ -1225,7 +1043,7 @@ def scrape_financial_statement(symbol: str, year: int) -> dict:
 
         try:
             content = _download_file(file_url)
-            parsed_income, parsed_balance, parsed_cash_flow = _parse_workbook(content, year)
+            parsed_income, parsed_balance, parsed_cash_flow = _parse_report_attachment(content, file_name, year)
 
             income_item = _build_statement_item(result, parsed_income, fallback_year=year)
             income_item["period"] = _resolve_period(result, file_name)
