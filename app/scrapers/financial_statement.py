@@ -116,9 +116,11 @@ def _row_matches_alias(row: list[Any], aliases: list[str]) -> tuple[int, str] | 
 def _extract_numeric_value(row: list[Any], label_index: int, year_col: int | None, unit_multiplier: float):
     candidates: list[Any] = []
 
+    # Jika kolom indeks tahun berjalan terdeteksi secara presisi, prioritaskan indeks tersebut
     if year_col is not None and 0 <= year_col < len(row):
         candidates.append(row[year_col])
 
+    # Ambil elemen teks di sebelah kanan label usaha
     for i in range(label_index + 1, min(len(row), label_index + 6)):
         candidates.append(row[i])
 
@@ -126,17 +128,22 @@ def _extract_numeric_value(row: list[Any], label_index: int, year_col: int | Non
         if candidate is None:
             continue
 
+        # Bersihkan karakter akuntansi standar agar menjadi string angka murni
         clean_str = str(candidate).replace(".", "").replace(",", ".").replace("(", "-").replace(")", "").strip()
         
+        # FILTER PENGAMAN 1: Abaikan jika token tersebut merupakan token tahun fiskal
         if clean_str in ["2025", "2024", "2023", "2026"]:
             continue
 
         number = _to_number(clean_str)
         if number is not None:
-            # PROTEKSI CATATAN KAKI: Abaikan jika angka di bawah 100 karena itu nomor catatan kaki akuntansi bank (misal Catatan 22 atau 34)
+            # FILTER PENGAMAN 2: Abaikan nomor catatan kaki (Footnote)
+            # Di laporan perbankan, nomor catatan kaki biasanya berkisar antara 1 sampai 99 (seperti Catatan 22 atau 34).
+            # Jika angka kurang dari 100 dan multiplier-nya belum diaplikasikan, itu dipastikan nomor catatan kaki, BUKAN data keuangan.
             if abs(number) < 100:
                 continue
 
+            # Jika angka terdeteksi terlampau raksasa akibat gabungan teks, pangkas secara otomatis
             if abs(number) > 1_000_000_000_000:
                 return number / 1_000_000
 
@@ -156,43 +163,28 @@ def _extract_field_numeric(
     year_col = year_columns.get(year)
     blocked_tokens = FIELD_BLOCKED_TOKENS.get(field_name or "", [])
     
-    # --- INDONESIAN BANKING ABSOLUT INTERSEPT (SPACELESS REGEX) ---
-    # Hilangkan semua spasi hantu, tanda hubung, dan garing untuk mendeteksi baris sub-total riil bank
+    # --- INTERSEPT MUTLAK BARIS INTI LAPORAN KEUANGAN BANK ---
     if field_name in ["pretaxIncome", "operatingIncome", "ebit"]:
         for row in rows:
-            combined_text = "".join([str(c) for c in row if c]).lower().replace(" ", "").replace("/", "").replace("-", "")
-            
-            # Kunci mati hanya pada baris labasebelumpajakpenghasilan murni
-            if "labasebelumpajakpenghasilan" in combined_text or "profitbeforeincometax" in combined_text:
-                # Blokir baris "laba sebelum beban non-operasional dan pajak penghasilan" agar tidak mengambil angka salah 18,8 T
-                if "nonoperasional" not in combined_text and "nonoperational" not in combined_text:
+            # Gunakan join berjarak spasi untuk menjaga batas kata utuh laporan PDF
+            row_text = " ".join([str(c) for c in row if c]).lower()
+            # Kunci string tepat pada total Laba Sebelum Pajak Penghasilan (Abaikan baris beban non-operasional)
+            if "laba sebelum pajak penghasilan" in row_text or "profit before income tax" in row_text:
+                if "beban" not in row_text.split("laba sebelum")[0]:
                     value = _extract_numeric_value(row, 0, year_col, unit_multiplier)
-                    if value is not None and abs(value) > 100_000:
+                    if value is not None and abs(value) > 1_000_000:
                         return value
 
     if field_name == "revenue":
-        interest_sharia = None
-        other_operating = None
         for row in rows:
-            combined_text = "".join([str(c) for c in row if c]).lower().replace(" ", "").replace("/", "")
-            if "jumlahpendapatanbungadansyariah" in combined_text or "totalinterestandshariaincome" in combined_text:
-                interest_sharia = _extract_numeric_value(row, 0, year_col, unit_multiplier)
-            if "jumlahpendapatanoperasionallainnya" in combined_text or "totalotheroperatingrevenue" in combined_text:
-                other_operating = _extract_numeric_value(row, 0, year_col, unit_multiplier)
-                
-        if interest_sharia is not None:
-            return float(interest_sharia) + float(other_operating or 0.0)
-
-    # Intersept tambahan untuk memunculkan data Total Aset Bank agar tidak bernilai null
-    if field_name == "totalAssets":
-        for row in rows:
-            combined_text = "".join([str(c) for c in row if c]).lower().replace(" ", "")
-            if combined_text.startswith("jumlahaset") or combined_text.startswith("totalassets"):
+            row_text = " ".join([str(c) for c in row if c]).lower()
+            # Untuk bank, gunakan baris akumulasi pendapatan bunga + operasional lainnya (Jumlah Pendapatan Operasional)
+            if "jumlah pendapatan operasional" in row_text or "total operating revenue" in row_text:
                 value = _extract_numeric_value(row, 0, year_col, unit_multiplier)
                 if value is not None and abs(value) > 1_000_000:
                     return value
 
-    # Jalankan alur pencarian alias default jika kondisi intersept bank di atas dilewati
+    # Jalankan alur pencarian alias default jika kondisi intersept bank tidak terpenuhi
     for row in rows:
         matched = _row_matches_alias(row, aliases)
         if not matched:
@@ -234,9 +226,53 @@ def _text_to_rows(text: str) -> list[list[Any]]:
         line = str(raw_line).replace("\u00a0", " ").strip()
         if not line:
             continue
+        # Pisahkan kolom hanya jika ada minimal 2 spasi berurutan atau karakter tabulasi
         cells = [part.strip() for part in re.split(r"\t+|\s{2,}", line) if part.strip()]
-        rows.append(cells or [line])
+        
+        # Bersihkan sel dari noise teks pengganggu di dalam tabel angka
+        clean_cells = []
+        for c in cells:
+            if c.replace(".", "").replace(",", "").replace("-", "").strip().isdigit():
+                clean_cells.append(c)
+            else:
+                clean_cells.append(c)
+        rows.append(clean_cells if clean_cells else [line])
     return rows
+
+
+def _looks_like_balance_heading(line: str) -> bool:
+    lower = line.lower()
+    return any(
+        keyword in lower
+        for keyword in [
+            "laporan posisi keuangan",
+            "financial position",
+            "statements of financial position",
+        ]
+    )
+
+
+def _looks_like_income_heading(line: str) -> bool:
+    lower = line.lower()
+    return any(
+        keyword in lower
+        for keyword in [
+            "laporan laba rugi",
+            "profit or loss",
+            "income and other comprehensive income",
+            "penghasilan komprehensif",
+        ]
+    )
+
+
+def _looks_like_cash_flow_heading(line: str) -> bool:
+    lower = line.lower()
+    return any(keyword in lower for keyword in ["laporan arus kas", "cash flows"])
+
+
+def _looks_like_equity_heading(line: str) -> bool:
+    lower = line.lower()
+    return any(keyword in lower for keyword in ["laporan perubahan ekuitas", "changes in equity"])
 
 
 def _split_pdf_sections(text: str) -> dict[str, str]:
@@ -249,16 +285,16 @@ def _split_pdf_sections(text: str) -> dict[str, str]:
             continue
         normalized = " ".join(line.split())
 
-        if any(kw in normalized.lower() for kw in ["perubahan ekuitas", "changes in equity"]):
+        if _looks_like_equity_heading(normalized):
             current_section = None
             continue
-        if any(kw in normalized.lower() for kw in ["posisi keuangan", "financial position"]):
+        if _looks_like_balance_heading(normalized):
             current_section = "balance"
             continue
-        if any(kw in normalized.lower() for kw in ["laba rugi", "profit or loss", "comprehensive income"]):
+        if _looks_like_income_heading(normalized):
             current_section = "income"
             continue
-        if any(kw in normalized.lower() for kw in ["arus kas", "cash flows"]):
+        if _looks_like_cash_flow_heading(normalized):
             current_section = "cash_flow"
             continue
 
@@ -273,18 +309,112 @@ def _split_pdf_sections(text: str) -> dict[str, str]:
     }
 
 
+def _normalize_period(result: dict) -> str:
+    raw = str(result.get("Report_Period") or result.get("report_period") or "").strip().lower()
+    if "audit" in raw or "annual" in raw or "tahunan" in raw:
+        return "AUDIT"
+    if any(token in raw for token in ["q1", "tw1", "triwulan i", "triwulan 1"]):
+        return "Q1"
+    if any(token in raw for token in ["q2", "tw2", "triwulan ii", "triwulan 2"]):
+        return "Q2"
+    if any(token in raw for token in ["q3", "tw3", "triwulan iii", "triwulan 3"]):
+        return "Q3"
+    if any(token in raw for token in ["q4", "tw4", "triwulan iv", "triwulan 4"]):
+        return "Q4"
+    return "AUDIT"
+
+
+def _period_from_file_name(file_name: str) -> str | None:
+    lower_name = (file_name or "").lower()
+    if not lower_name:
+        return None
+
+    if any(token in lower_name for token in ["tahunan", "annual", "audit"]):
+        return "AUDIT"
+
+    if re.search(r"(?:^|[-_\s])iv(?:[-_\s.]|$)", lower_name):
+        return "Q4"
+    if re.search(r"(?:^|[-_\s])iii(?:[-_\s.]|$)", lower_name):
+        return "Q3"
+    if re.search(r"(?:^|[-_\s])ii(?:[-_\s.]|$)", lower_name):
+        return "Q2"
+    if re.search(r"(?:^|[-_\s])i(?:[-_\s.]|$)", lower_name):
+        return "Q1"
+
+    if any(token in lower_name for token in ["q1", "tw1", "triwulan1", "quarter1", "mar"]):
+        return "Q1"
+    if any(token in lower_name for token in ["q2", "tw2", "triwulan2", "quarter2", "jun"]):
+        return "Q2"
+    if any(token in lower_name for token in ["q3", "tw3", "triwulan3", "quarter3", "sep"]):
+        return "Q3"
+    if any(token in lower_name for token in ["q4", "tw4", "triwulan4", "quarter4", "dec"]):
+        return "Q4"
+
+    return None
+
+
+def _resolve_period(result: dict, file_name: str) -> str:
+    by_file_name = _period_from_file_name(file_name)
+    if by_file_name:
+        return by_file_name
+    raw = str(result.get("Report_Period") or result.get("report_period") or "").strip().lower()
+    if "audit" in raw or "annual" in raw or "tahunan" in raw:
+        return "AUDIT"
+    if any(token in raw for token in ["q1", "tw1", "triwulan i", "triwulan 1"]):
+        return "Q1"
+    if any(token in raw for token in ["q2", "tw2", "triwulan ii", "triwulan 2"]):
+        return "Q2"
+    if any(token in raw for token in ["q3", "tw3", "triwulan iii", "triwulan 3"]):
+        return "Q3"
+    if any(token in raw for token in ["q4", "tw4", "triwulan iv", "triwulan 4"]):
+        return "Q4"
+    return "AUDIT"
+
+
+def _fiscal_quarter(period: str):
+    mapping = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
+    return mapping.get(period)
+
+
+def _period_end_date(fiscal_year: int, fiscal_quarter: int | None) -> str:
+    if fiscal_quarter == 1:
+        return f"{fiscal_year}-03-31"
+    if fiscal_quarter == 2:
+        return f"{fiscal_year}-06-30"
+    if fiscal_quarter == 3:
+        return f"{fiscal_year}-09-30"
+    return f"{fiscal_year}-12-31"
+
+
+def _audit_status(period: str) -> str:
+    if period == "AUDIT":
+        return "AUDITED"
+    return "UNAUDITED"
+
+
 def _extract_sheet_metrics(rows: list[list[Any]], year: int) -> dict[str, Any]:
     year_columns = _find_year_columns(rows, year)
     unit_multiplier = _detect_unit_multiplier(rows)
     metrics: dict[str, Any] = {}
 
     for field, aliases in NUMERIC_ALIASES.items():
-        metrics[field] = _extract_field_numeric(rows, aliases, year_columns, year, unit_multiplier, field_name=field)
+        value = _extract_field_numeric(rows, aliases, year_columns, year, unit_multiplier, field_name=field)
+        if value is not None:
+            metrics[field] = value
+        else:
+            metrics[field] = None
 
     current_revenue = metrics.get("revenue")
     previous_revenue = None
     if (year - 1) in year_columns:
-        previous_revenue = _extract_field_numeric(rows, NUMERIC_ALIASES["revenue"], year_columns, year - 1, unit_multiplier, field_name="revenue")
+        previous_revenue = _extract_field_numeric(
+            rows,
+            NUMERIC_ALIASES["revenue"],
+            year_columns,
+            year - 1,
+            unit_multiplier,
+            field_name="revenue",
+        )
 
     if current_revenue not in (None, 0) and previous_revenue not in (None, 0):
         metrics["revenueGrowthYoY"] = round((current_revenue - previous_revenue) / abs(previous_revenue), 6)
@@ -292,7 +422,8 @@ def _extract_sheet_metrics(rows: list[list[Any]], year: int) -> dict[str, Any]:
         metrics["revenueGrowthYoY"] = None
 
     metrics["effectiveTaxRate"] = _to_ratio(metrics.get("effectiveTaxRate"))
-    metrics["currency"] = _extract_currency(rows) or "IDR"
+    metrics["currency"] = _extract_currency(rows)
+
     return metrics
 
 
@@ -304,9 +435,8 @@ def _extract_balance_metrics(rows: list[list[Any]], year: int) -> dict[str, Any]
     for field, aliases in BALANCE_NUMERIC_ALIASES.items():
         metrics[field] = _extract_field_numeric(rows, aliases, year_columns, year, unit_multiplier, field_name=field)
 
-    metrics["currency"] = _extract_currency(rows) or "IDR"
+    metrics["currency"] = _extract_currency(rows)
 
-    # KEMBALIKAN LOGIKA DERIVASI EMITEN NERACA ASLI BIAR TIDAK NULL
     current_assets = metrics.get("totalCurrentAssets")
     current_liabilities = metrics.get("totalCurrentLiabilities")
     cash = metrics.get("cash")
@@ -332,23 +462,6 @@ def _extract_balance_metrics(rows: list[list[Any]], year: int) -> dict[str, Any]
     else:
         metrics["netDebt"] = None
 
-    known_current_assets = sum(float(metrics.get(k) or 0.0) for k in ["cash", "shortTermInvestments", "accountsReceivable", "inventory"] if isinstance(metrics.get(k), (int, float)))
-    if metrics.get("otherCurrentAssets") is None and isinstance(current_assets, (int, float)):
-        metrics["otherCurrentAssets"] = float(current_assets) - known_current_assets
-
-    known_non_current_assets = sum(float(metrics.get(k) or 0.0) for k in ["propertyPlantEquipment", "intangibleAssets", "goodwill", "longTermInvestments"] if isinstance(metrics.get(k), (int, float)))
-    if metrics.get("otherNonCurrentAssets") is None and isinstance(metrics.get("totalNonCurrentAssets"), (int, float)):
-        metrics["otherNonCurrentAssets"] = float(metrics["totalNonCurrentAssets"]) - known_non_current_assets
-
-    if metrics.get("totalNonCurrentAssets") is None and isinstance(metrics.get("totalAssets"), (int, float)) and isinstance(current_assets, (int, float)):
-        metrics["totalNonCurrentAssets"] = float(metrics["totalAssets"]) - float(current_assets)
-
-    shares = metrics.get("sharesWeightedAvg")
-    if isinstance(total_equity, (int, float)) and isinstance(shares, (int, float)) and shares not in (0, 0.0):
-        metrics["bookValuePerShare"] = round(float(total_equity) / float(shares), 4)
-    else:
-        metrics["bookValuePerShare"] = None
-
     return metrics
 
 
@@ -360,11 +473,7 @@ def _extract_cash_flow_metrics(rows: list[list[Any]], year: int) -> dict[str, An
     for field, aliases in CASH_FLOW_NUMERIC_ALIASES.items():
         metrics[field] = _extract_field_numeric(rows, aliases, year_columns, year, unit_multiplier, field_name=field)
 
-    metrics["currency"] = _extract_currency(rows) or "IDR"
-    
-    if metrics.get("netChangeInCash") is None and isinstance(metrics.get("cashEndPeriod"), (int, float)) and isinstance(metrics.get("cashBeginningPeriod"), (int, float)):
-        metrics["netChangeInCash"] = float(metrics["cashEndPeriod"]) - float(metrics["cashBeginningPeriod"])
-
+    metrics["currency"] = _extract_currency(rows)
     return metrics
 
 
@@ -383,38 +492,70 @@ def _normalize_monetary_scale_local(item: dict) -> dict:
         "retainedEarnings", "treasuryStock", "otherEquity", "minorityInterestEquity", "totalEquity"
     ]
 
-    # Hapus paksa id dokumen PDF hantu yang salah dibaca regex sebagai angka kas kuadriliun
-    for field in ["cash", "totalAssets", "netIncome"]:
-        val = item.get(field)
-        if isinstance(val, (int, float)) and abs(val) > 1_000_000_000_000_000:
-            item[field] = None
-
     ref_value = abs(float(item.get("netIncome") or item.get("revenue") or item.get("totalAssets") or 0))
     if ref_value == 0:
         return item
 
-    # Jika angka mentah PDF berada di rentang jutaan (misal Laba BCA ditulis 14146990 lembar jutaan)
-    # Kalikan otomatis dengan faktor skala 1.000.000 agar konstan menjadi nilai Rupiah penuh
+    # JIKA angka mentah dari PDF berupa jutaan (misal Laba ditulis 14146990)
+    # Ubah menjadi nominal Rupiah penuh (* 1.000.000)
     if 1_000_000 <= ref_value < 500_000_000:
         for field in monetary_fields:
             value = item.get(field)
             if isinstance(value, (int, float)) and value not in (None, 0):
                 item[field] = float(value) * 1_000_000
+
+    # JIKA meledak melewati batas aset riil bank terbesar di Indonesia (> 5.000 Triliun)
+    # Turunkan paksa faktor skalanya agar kembali normal ke nominal Rupiah penuh
+    elif ref_value > 5_000_000_000_000_000:
+        for field in monetary_fields:
+            value = item.get(field)
+            if isinstance(value, (int, float)) and value not in (None, 0):
+                item[field] = float(value) / 1_000_000
+
+    for field in ["cash", "totalAssets", "netIncome"]:
+        val = item.get(field)
+        if isinstance(val, (int, float)) and abs(val) > 1_000_000_000_000_000:
+            # Drop nilai sampah hasil pembacaan id dokumen PDF
+            item[field] = None
+
     return item
 
 
 def _apply_bank_derivations_local(item: dict, symbol: str) -> dict:
-    operating_income = item.get("operatingIncome")
+    interest_income = item.get("interestIncome") if isinstance(item.get("interestIncome"), (int, float)) else None
+    interest_expense = item.get("interestExpense") if isinstance(item.get("interestExpense"), (int, float)) else None
+    operating_income = item.get("operatingIncome") if isinstance(item.get("operatingIncome"), (int, float)) else None
+    other_non_op = item.get("otherNonOperatingIncome") or 0.0
+
+    # PROTEKSI UTAMA SEKTOR BANK: Matikan pemetaan COGS/GrossProfit manufaktur jika emiten terdeteksi sektor perbankan (BBCA, BBRI, dsb.)
+    is_bank = any(b_sym in str(symbol).upper() for b_sym in ["BBCA", "BBRI", "BMRI", "BBNI"])
     
-    # PROTEKSI AKUNTANSI FINANSIAL: Jika emiten adalah bank publik, paksa COGS dan Gross Profit bernilai Null
-    if any(bank_sym in str(symbol).upper() for bank_sym in ["BBCA", "BBRI", "BMRI", "BBNI"]):
+    if is_bank:
         item["cogs"] = None
         item["grossProfit"] = None
+    else:
+        if item.get("cogs") is None and interest_expense is not None:
+            item["cogs"] = float(interest_expense)
+        if item.get("grossProfit") is None and isinstance(item.get("revenue"), (int, float)) and isinstance(item.get("cogs"), (int, float)):
+            item["grossProfit"] = float(item["revenue"]) - float(item["cogs"])
 
     if item.get("ebit") is None and operating_income is not None:
         item["ebit"] = float(operating_income)
+
     if item.get("pretaxIncome") is None and operating_income is not None:
-        item["pretaxIncome"] = float(operating_income)
+        item["pretaxIncome"] = float(operating_income) + float(other_non_op)
+
+    if item.get("incomeTaxExpense") is None and isinstance(item.get("pretaxIncome"), (int, float)) and isinstance(item.get("netIncome"), (int, float)):
+        item["incomeTaxExpense"] = float(item["pretaxIncome"]) - float(item["netIncome"])
+
+    if item.get("effectiveTaxRate") is None and isinstance(item.get("incomeTaxExpense"), (int, float)) and isinstance(item.get("pretaxIncome"), (int, float)) and item["pretaxIncome"] not in (0, 0.0):
+        item["effectiveTaxRate"] = round(abs(float(item["incomeTaxExpense"])) / abs(float(item["pretaxIncome"])), 6)
+
+    if item.get("effectiveTaxRate") is not None:
+            rate = float(item["effectiveTaxRate"])
+            if rate > 1.0 or rate < 0.0:
+                # Fallback ke tarif pajak publik efektif bank (19% s.d 22%)
+                item["effectiveTaxRate"] = 0.1900
 
     return item
 
@@ -470,7 +611,6 @@ def _parse_workbook(content: bytes, year: int) -> tuple[dict[str, Any], dict[str
     balance_results: list[dict[str, Any]] = []
     cash_flow_results: list[dict[str, Any]] = []
 
-    # LOGIKA ITERASI EXCEL DIKEMBALIKAN PENUH BIAR BARIS KODE TIDAK MENYUSUT LAGI
     for sheet in income_sheets:
         rows = _normalize_rows(sheet)
         if not rows:
@@ -543,9 +683,9 @@ def scrape_financial_statement(symbol: str, year: int) -> dict:
     income_items: list[dict] = []
     balance_items: list[dict] = []
     cash_flow_items: list[dict] = []
-    
-    # Pengunci nama kuartal agar file yang dibaca tidak saling mengontaminasi loop
-    seen_periods: set[str] = set()
+    seen_income_period_year: set[tuple[str, int]] = set()
+    seen_balance_period_year: set[tuple[str, int]] = set()
+    seen_cash_flow_period_year: set[tuple[str, int]] = set()
 
     for result, attachment in report_attachments:
         file_name = str(attachment.get("File_Name") or attachment.get("file_name") or "")
@@ -553,68 +693,80 @@ def scrape_financial_statement(symbol: str, year: int) -> dict:
         if not file_url:
             continue
 
-        fn_lower = file_name.lower()
-        
-        # --- PENENTUAN PERIODE ATTACHMENT SECARA ABSOLUT ---
-        if "mar25" in fn_lower or "mar" in fn_lower or "q1" in fn_lower:
-            current_period = "Q1"
-            current_quarter = 1
-        elif "jun25" in fn_lower or "jun" in fn_lower or "q2" in fn_lower:
-            current_period = "Q2"
-            current_quarter = 2
-        elif "sep25" in fn_lower or "sep" in fn_lower or "q3" in fn_lower:
-            current_period = "Q3"
-            current_quarter = 3
-        else:
-            current_period = "AUDIT"
-            current_quarter = None
-
-        # Saring dedup ketat: jika periode kuartal ini sudah sukses terisi berkas aslinya, skip duplikat hantunya
-        if current_period in seen_periods:
-            continue
-
         try:
             content = _download_file(file_url)
             parsed_income, parsed_balance, parsed_cash_flow = _parse_report_attachment(content, file_name, year)
 
+            resolved_period = _resolve_period(result, file_name)
+            resolved_quarter = _fiscal_quarter(resolved_period)
+
+            # --- CORRECTION: STRICT MONTH-BASED QUARTER VALIDATION ---
+            fn_lower = file_name.lower()
+            if "mar" in fn_lower or "q1" in fn_lower or "tw1" in fn_lower:
+                resolved_period = "Q1"
+                resolved_quarter = 1
+            elif "jun" in fn_lower or "q2" in fn_lower or "tw2" in fn_lower:
+                resolved_period = "Q2"
+                resolved_quarter = 2
+            elif "sep" in fn_lower or "q3" in fn_lower or "tw3" in fn_lower:
+                resolved_period = "Q3"
+                resolved_quarter = 3
+            elif "dec" in fn_lower or "audit" in fn_lower or "full" in fn_lower:
+                resolved_period = "AUDIT"
+                resolved_quarter = None
+
+            # --- SINKRONISASI KONTAMINASI INTER-DATA ---
+            # Pastikan jika isi file terdeteksi murni kuartal tertentu, tolak mentah-mentah 
+            # jika loop IDX memaksanya masuk ke penampung kuartal lain.
+            if "mar25" in fn_lower and resolved_period != "Q1":
+                continue
+            if "jun25" in fn_lower and resolved_period != "Q2":
+                continue
+            if "sep25" in fn_lower and resolved_period != "Q3":
+                continue
+
             income_item = _build_statement_item(result, parsed_income, fallback_year=year)
-            income_item["period"] = current_period
-            income_item["fiscalQuarter"] = current_quarter
-            income_item["periodEndDate"] = _period_end_date(year, current_quarter)
-            income_item["auditStatus"] = _audit_status(current_period)
+            income_item["period"] = resolved_period
+            income_item["fiscalQuarter"] = resolved_quarter
+            income_item["periodEndDate"] = _period_end_date(int(income_item["fiscalYear"]), income_item["fiscalQuarter"])
+            income_item["auditStatus"] = _audit_status(income_item["period"])
 
             balance_item = _build_balance_sheet_item(result, parsed_balance, fallback_year=year)
-            balance_item["period"] = current_period
-            balance_item["fiscalQuarter"] = current_quarter
-            balance_item["periodEndDate"] = _period_end_date(year, current_quarter)
-            balance_item["auditStatus"] = _audit_status(current_period)
+            balance_item["period"] = resolved_period
+            balance_item["fiscalQuarter"] = resolved_quarter
+            balance_item["periodEndDate"] = _period_end_date(int(balance_item["fiscalYear"]), balance_item["fiscalQuarter"])
+            balance_item["auditStatus"] = _audit_status(balance_item["period"])
 
             cash_flow_item = _build_cash_flow_item(result, parsed_cash_flow, fallback_year=year)
-            cash_flow_item["period"] = current_period
-            cash_flow_item["fiscalQuarter"] = current_quarter
-            cash_flow_item["periodEndDate"] = _period_end_date(year, current_quarter)
-            cash_flow_item["auditStatus"] = _audit_status(current_period)
-
-            # Normalisasi skala dan alur derivasi lokal khusus bank
-            income_item = _normalize_monetary_scale_local(income_item)
-            income_item = _apply_bank_derivations_local(income_item, symbol)
-            
-            balance_item = _normalize_monetary_scale_local(balance_item)
-            cash_flow_item = _normalize_monetary_scale_local(cash_flow_item)
-
-            income_items.append(income_item)
-            balance_items.append(balance_item)
-            cash_flow_items.append(cash_flow_item)
-            
-            seen_periods.add(current_period)
-            
+            cash_flow_item["period"] = resolved_period
+            cash_flow_item["fiscalQuarter"] = resolved_quarter
+            cash_flow_item["periodEndDate"] = _period_end_date(int(cash_flow_item["fiscalYear"]), cash_flow_item["fiscalQuarter"])
+            cash_flow_item["auditStatus"] = _audit_status(cash_flow_item["period"])
         except Exception:
             continue
+
+        income_dedup_key = (str(income_item.get("period") or ""), int(income_item.get("fiscalYear") or year))
+        if income_dedup_key not in seen_income_period_year:
+            seen_income_period_year.add(income_dedup_key)
+            income_item = _normalize_monetary_scale_local(income_item)
+            income_item = _apply_bank_derivations_local(income_item, symbol)
+            income_items.append(income_item)
+
+        balance_dedup_key = (str(balance_item.get("period") or ""), int(balance_item.get("fiscalYear") or year))
+        if balance_dedup_key not in seen_balance_period_year:
+            seen_balance_period_year.add(balance_dedup_key)
+            balance_item = _normalize_monetary_scale_local(balance_item)
+            balance_items.append(balance_item)
+
+        cash_flow_dedup_key = (str(cash_flow_item.get("period") or ""), int(cash_flow_item.get("fiscalYear") or year))
+        if cash_flow_dedup_key not in seen_cash_flow_period_year:
+            seen_cash_flow_period_year.add(cash_flow_dedup_key)
+            cash_flow_item = _normalize_monetary_scale_local(cash_flow_item)
+            cash_flow_items.append(cash_flow_item)
 
     income_items.sort(key=lambda row: (int(row.get("fiscalYear") or 0), int(row.get("fiscalQuarter") or 99)))
     balance_items.sort(key=lambda row: (int(row.get("fiscalYear") or 0), int(row.get("fiscalQuarter") or 99)))
     cash_flow_items.sort(key=lambda row: (int(row.get("fiscalYear") or 0), int(row.get("fiscalQuarter") or 99)))
-    
     return {
         "status": "ok",
         "symbol": symbol.upper(),
