@@ -4,6 +4,7 @@ from flask import Blueprint, request, jsonify
 from app.validators import (
     validate_corporate_action_request,
     validate_financial_statement_request,
+    validate_financial_statement_v2_request,
     validate_emiten_request,
     validate_fundamental_request,
     validate_shares_data_request,
@@ -12,6 +13,7 @@ from app.validators import (
 )
 from app.services.corporate_action_service import fetch_and_build_corporate_action
 from app.services.financial_statement_service import fetch_and_build_financial_statement
+from app.services.financial_statement_v2_service import fetch_and_build_financial_statement_v2
 from app.services.emiten_service import scrape_emiten_detail, scrape_emiten_list
 from app.services.emiten_service import fetch_ajaib_stock_market
 from app.services.fundamental_service import fetch_and_build_fundamental
@@ -193,4 +195,23 @@ def get_stock_price():
         return jsonify({
             "status": "error",
             "message": "Failed to fetch stock price data from IDX. Please try again later.",
+        }), 502
+
+
+@bp.route("/financial-statement-v2", methods=["GET"])
+def get_financial_statement_v2():
+    query = request.args.to_dict(flat=True)
+    symbol, year, sector, errors = validate_financial_statement_v2_request(query)
+    if errors:
+        return jsonify({"status": "error", "errors": errors}), 400
+
+    try:
+        result = fetch_and_build_financial_statement_v2(symbol, year, sector)
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    except Exception:
+        return jsonify({
+            "status": "error",
+            "message": "Failed to fetch financial statement v2 data from IDX. Please try again later.",
         }), 502

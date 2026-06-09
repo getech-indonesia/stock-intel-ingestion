@@ -458,6 +458,20 @@ def _split_pdf_sections(text: str) -> dict[str, str]:
     }
 
 
+def _row_matches_alias(row: list[Any], aliases: list[str]) -> tuple[int, str] | None:
+    normalized_aliases = [_normalize_text(alias) for alias in aliases]
+    for index, cell in enumerate(row[:6]):
+        normalized_cell = _normalize_text(cell)
+        if not normalized_cell:
+            continue
+        raw_label = str(cell or "").strip().lower()
+        if any(blocked in raw_label for blocked in TEXT_BLOCKLIST):
+            continue
+        if any(alias and alias in normalized_cell for alias in normalized_aliases):
+            return index, str(cell).strip()
+    return None
+
+
 def _normalize_period(result: dict) -> str:
     raw = str(result.get("Report_Period") or result.get("report_period") or "").strip().lower()
     if "audit" in raw or "annual" in raw or "tahunan" in raw:
@@ -539,3 +553,20 @@ def _audit_status(period: str) -> str:
     if period == "AUDIT":
         return "AUDITED"
     return "UNAUDITED"
+
+
+def _find_year_columns(rows: list[list[Any]], year: int) -> dict[int, int]:
+    year_columns: dict[int, int] = {}
+    targets = {year, year - 1, year - 2}
+
+    for row in rows[:30]:
+        for idx, cell in enumerate(row):
+            text = str(cell or "").strip()
+            match = re.search(r"(19|20)\d{2}", text)
+            if not match:
+                continue
+            year_value = int(match.group(0))
+            if year_value in targets and year_value not in year_columns:
+                year_columns[year_value] = idx
+
+    return year_columns
