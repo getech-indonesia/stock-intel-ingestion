@@ -1,5 +1,6 @@
 from app import create_app
 from app.scrapers import financial_statement as financial_statement_module
+from app.scrapers import financial_statement_v2 as financial_statement_v2_module
 
 
 def _build_financial_statement_pdf_text() -> str:
@@ -185,3 +186,45 @@ def test_scrape_financial_statement_splits_period_from_file_name(monkeypatch):
     assert "Q1" in balance_periods
     assert "Q2" in balance_periods
     assert "Q3" in balance_periods
+
+
+def test_adjust_cumulative_quarter_items():
+    items = [
+        {
+            "fiscalYear": 2025,
+            "fiscalQuarter": 1,
+            "revenue": 100,
+            "netIncome": 10,
+            "pretaxIncome": 20,
+            "incomeTaxExpense": 5,
+            "effectiveTaxRate": 0.25,
+        },
+        {
+            "fiscalYear": 2025,
+            "fiscalQuarter": 2,
+            "revenue": 250,
+            "netIncome": 30,
+            "pretaxIncome": 50,
+            "incomeTaxExpense": 12.5,
+            "effectiveTaxRate": 0.25,
+        },
+        {
+            "fiscalYear": 2025,
+            "fiscalQuarter": 3,
+            "revenue": 425,
+            "netIncome": 55,
+            "pretaxIncome": 90,
+            "incomeTaxExpense": 22.5,
+            "effectiveTaxRate": 0.25,
+        },
+    ]
+
+    adjusted = financial_statement_v2_module._adjust_cumulative_quarter_items(items)
+
+    assert adjusted[0]["revenue"] == 100
+    assert adjusted[1]["revenue"] == 150
+    assert adjusted[2]["revenue"] == 175
+    assert adjusted[1]["netIncome"] == 20
+    assert adjusted[2]["netIncome"] == 25
+    assert adjusted[1]["effectiveTaxRate"] == 0.25
+    assert adjusted[2]["effectiveTaxRate"] == 0.25

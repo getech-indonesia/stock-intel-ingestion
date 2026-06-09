@@ -415,6 +415,49 @@ def _apply_bank_derivations(item: dict, symbol: str) -> dict:
     return item
 
 
+def _adjust_cumulative_quarter_items(items: list[dict]) -> list[dict]:
+    numeric_fields = [
+        "revenue", "cogs", "grossProfit", "operatingExpenses", "sellingExpenses",
+        "generalAdminExpenses", "rdExpenses", "depreciationAmort", "ebit", "ebitda",
+        "operatingIncome", "interestExpense", "interestIncome", "otherNonOperatingIncome",
+        "pretaxIncome", "incomeTaxExpense", "netIncome", "netIncomeAttributable",
+        "minorityInterest", "eps", "epsDiluted", "sharesWeightedAvg",
+    ]
+    original_items = [dict(item) for item in items]
+
+    for index, item in enumerate(items):
+        quarter = item.get("fiscalQuarter")
+        if quarter not in (2, 3):
+            continue
+
+        previous = None
+        for prior in reversed(original_items[:index]):
+            if (
+                prior.get("fiscalYear") == item.get("fiscalYear")
+                and prior.get("fiscalQuarter") == quarter - 1
+            ):
+                previous = prior
+                break
+
+        if not previous:
+            continue
+
+        for field in numeric_fields:
+            current = item.get(field)
+            previous_value = previous.get(field)
+            if isinstance(current, (int, float)) and isinstance(previous_value, (int, float)):
+                item[field] = current - previous_value
+
+        pretax = item.get("pretaxIncome")
+        tax = item.get("incomeTaxExpense")
+        if isinstance(pretax, (int, float)) and isinstance(tax, (int, float)) and pretax != 0:
+            item["effectiveTaxRate"] = round(abs(float(tax)) / abs(float(pretax)), 6)
+        else:
+            item["effectiveTaxRate"] = None
+
+    return items
+
+
 def scrape_financial_statement_v2(symbol: str, year: int, sector: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Scrape financial statement v2 with strict filtering and sector support
@@ -476,6 +519,7 @@ def scrape_financial_statement_v2(symbol: str, year: int, sector: Optional[str] 
             income_items.append(income_item)
 
     income_items.sort(key=lambda row: (int(row.get("fiscalYear") or 0), int(row.get("fiscalQuarter") or 99)))
+    income_items = _adjust_cumulative_quarter_items(income_items)
 
     # Transform to the required output format
     output = []

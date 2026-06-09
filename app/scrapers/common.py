@@ -95,7 +95,7 @@ def _get(url: str, params: dict, headers: dict | None = None) -> dict:
 def _download_file(url: str) -> bytes:
     try:
         scraper = _create_scraper()
-        response = scraper.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        response = scraper.get(url, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         return response.content
     except requests.RequestException as exc:
