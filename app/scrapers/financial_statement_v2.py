@@ -119,6 +119,154 @@ def _extract_field_numeric(
     return None
 
 
+def _parse_banking_sector(rows: list[list[Any]], year: int) -> dict[str, Any]:
+    """Parse banking sector financial data using regex and table rows"""
+    year_columns = _find_year_columns(rows, year)
+    unit_multiplier = _detect_unit_multiplier(rows)
+    metrics: dict[str, Any] = {}
+
+    # Initialize all fields to None
+    for field in NUMERIC_ALIASES.keys():
+        metrics[field] = None
+
+    # Helper to extract numeric value from row
+    def get_value(aliases: list[str]) -> Optional[float]:
+        for row in rows:
+            matched = _row_matches_alias(row, aliases)
+            if matched:
+                label_index, _ = matched
+                value = _extract_numeric_value(row, label_index, year_columns.get(year), unit_multiplier)
+                if value is not None:
+                    return value
+        return None
+
+    # Extract each field
+    interest_income_aliases = [
+        "PENDAPATAN BUNGA DAN SYARIAH BERSIH",
+        "Pendapatan Bunga & Syariah Bersih",
+        "Jumlah pendapatan bunga dan syariah",
+        "Total interest and sharia income",
+        "Pendapatan bunga",
+        "Interest income"
+    ]
+    other_operating_income_aliases = [
+        "Jumlah pendapatan operasional lainnya",
+        "Total other operating income"
+    ]
+    impairment_losses_aliases = [
+        "Beban penyisihan kerugian penurunan nilai aset",
+        "Impairment losses on assets"
+    ]
+    interest_expense_aliases = [
+        "Beban bunga",
+        "Interest expense"
+    ]
+    operating_expenses_aliases = [
+        "Jumlah beban operasional lainnya",
+        "Total other operating expenses"
+    ]
+    pretax_income_aliases = [
+        "Laba sebelum pajak penghasilan",
+        "Income before tax"
+    ]
+    income_tax_expense_aliases = [
+        "Beban pajak penghasilan",
+        "Income tax expense"
+    ]
+    net_income_aliases = [
+        "Laba bersih",
+        "Net income"
+    ]
+
+    # Extract values
+    interest_income = get_value(interest_income_aliases)
+    other_operating_income = get_value(other_operating_income_aliases)
+    impairment_losses = get_value(impairment_losses_aliases)
+    interest_expense = get_value(interest_expense_aliases)
+    operating_expenses = get_value(operating_expenses_aliases)
+    pretax_income = get_value(pretax_income_aliases)
+    income_tax_expense = get_value(income_tax_expense_aliases)
+    net_income = get_value(net_income_aliases)
+
+    # Calculate revenue for banking: interest_income + other_operating_income - impairment_losses
+    if interest_income is not None:
+        revenue = interest_income
+        if other_operating_income is not None:
+            revenue += other_operating_income
+        if impairment_losses is not None:
+            revenue += impairment_losses  # impairment_losses is negative, so subtract
+        metrics["revenue"] = revenue
+
+    # Assign other fields
+    metrics["interestIncome"] = interest_income
+    metrics["interestExpense"] = interest_expense
+    metrics["operatingExpenses"] = operating_expenses
+    metrics["pretaxIncome"] = pretax_income
+    metrics["incomeTaxExpense"] = income_tax_expense
+    metrics["netIncome"] = net_income
+
+    # Calculate effective tax rate
+    if income_tax_expense is not None and pretax_income is not None and pretax_income != 0:
+        metrics["effectiveTaxRate"] = round(abs(income_tax_expense) / abs(pretax_income), 6)
+    else:
+        metrics["effectiveTaxRate"] = None
+
+    # Calculate revenueGrowthYoY
+    if (year - 1) in year_columns:
+        # Get previous year's interest income, other operating income, and impairment losses
+        prev_interest_income = None
+        prev_other_operating_income = None
+        prev_impairment_losses = None
+        
+        for row in rows:
+            matched = _row_matches_alias(row, interest_income_aliases)
+            if matched:
+                label_index, _ = matched
+                prev_interest_income = _extract_numeric_value(row, label_index, year_columns.get(year - 1), unit_multiplier)
+                if prev_interest_income is not None:
+                    break
+        
+        for row in rows:
+            matched = _row_matches_alias(row, other_operating_income_aliases)
+            if matched:
+                label_index, _ = matched
+                prev_other_operating_income = _extract_numeric_value(row, label_index, year_columns.get(year - 1), unit_multiplier)
+                if prev_other_operating_income is not None:
+                    break
+        
+        for row in rows:
+            matched = _row_matches_alias(row, impairment_losses_aliases)
+            if matched:
+                label_index, _ = matched
+                prev_impairment_losses = _extract_numeric_value(row, label_index, year_columns.get(year - 1), unit_multiplier)
+                if prev_impairment_losses is not None:
+                    break
+        
+        # Calculate previous year's revenue
+        if prev_interest_income is not None:
+            prev_revenue = prev_interest_income
+            if prev_other_operating_income is not None:
+                prev_revenue += prev_other_operating_income
+            if prev_impairment_losses is not None:
+                prev_revenue += prev_impairment_losses  # prev_impairment_losses is negative, so subtract
+        else:
+            prev_revenue = None
+        
+        if prev_revenue is not None and metrics["revenue"] is not None and metrics["revenue"] != 0 and prev_revenue != 0:
+            # We need to use absolute values for growth calculation
+            current_rev_abs = abs(metrics["revenue"])
+            prev_rev_abs = abs(prev_revenue)
+            metrics["revenueGrowthYoY"] = round((current_rev_abs - prev_rev_abs) / prev_rev_abs, 6)
+        else:
+            metrics["revenueGrowthYoY"] = None
+    else:
+        metrics["revenueGrowthYoY"] = None
+
+    metrics["currency"] = _extract_currency(rows) or "IDR"
+
+    return metrics
+
+
 def _extract_sheet_metrics(rows: list[list[Any]], year: int) -> dict[str, Any]:
     year_columns = _find_year_columns(rows, year)
     unit_multiplier = _detect_unit_multiplier(rows)
@@ -144,7 +292,10 @@ def _extract_sheet_metrics(rows: list[list[Any]], year: int) -> dict[str, Any]:
         )
 
     if current_revenue not in (None, 0) and previous_revenue not in (None, 0):
-        metrics["revenueGrowthYoY"] = round((current_revenue - previous_revenue) / abs(previous_revenue), 6)
+        # Use absolute values for growth calculation
+        current_rev_abs = abs(current_revenue)
+        prev_rev_abs = abs(previous_revenue)
+        metrics["revenueGrowthYoY"] = round((current_rev_abs - prev_rev_abs) / prev_rev_abs, 6)
     else:
         metrics["revenueGrowthYoY"] = None
 
@@ -212,13 +363,17 @@ def _normalize_monetary_scale(item: dict) -> dict:
         return item
 
     if ref_value >= 1_000_000_000:
+        for field in monetary_fields:
+            value = item.get(field)
+            if isinstance(value, (int, float)) and value not in (None, 0):
+                item[field] = abs(float(value))
         return item
 
     if 1_000_000 <= ref_value < 1_000_000_000:
         for field in monetary_fields:
             value = item.get(field)
             if isinstance(value, (int, float)) and value not in (None, 0):
-                item[field] = float(value) * 1_000_000
+                item[field] = abs(float(value)) * 1_000_000
 
     return item
 
@@ -281,7 +436,11 @@ def scrape_financial_statement_v2(symbol: str, year: int, sector: Optional[str] 
             content = _download_file(file_url)
             extracted_text = _extract_attachment_text(file_name, content)
             section_text = _split_pdf_sections(extracted_text)
-            parsed_income = _extract_sheet_metrics(_text_to_rows(section_text["income"]), year)
+            rows = _text_to_rows(section_text["income"])
+            if sector == "keuangan":
+                parsed_income = _parse_banking_sector(rows, year)
+            else:
+                parsed_income = _extract_sheet_metrics(rows, year)
             
             resolved_period = _resolve_period(result, file_name)
             resolved_quarter = _fiscal_quarter(resolved_period)
