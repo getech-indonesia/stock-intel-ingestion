@@ -151,7 +151,10 @@ def _parse_banking_sector(rows: list[list[Any]], year: int) -> dict[str, Any]:
     ]
     other_operating_income_aliases = [
         "Jumlah pendapatan operasional lainnya",
-        "Total other operating income"
+        "Pendapatan operasional lainnya",
+        "pendapatan operasional lainnya",
+        "Total other operating income",
+        "other operating income",
     ]
     impairment_losses_aliases = [
         "Beban penyisihan kerugian penurunan nilai aset",
@@ -179,7 +182,23 @@ def _parse_banking_sector(rows: list[list[Any]], year: int) -> dict[str, Any]:
     ]
 
     # Extract values
-    interest_income = get_value(interest_income_aliases)
+    # Prefer explicit "bersih" (net) rows when available (e.g. "Pendapatan bunga dan syariah - bersih").
+    def _get_interest_income_prefer_net():
+        # look for rows that mention both interest and 'bersih'
+        for row in rows:
+            row_text = " ".join([str(c) for c in row if c]).lower()
+            if "bunga" in row_text and "bersih" in row_text:
+                # attempt to extract using the found label index
+                matched = _row_matches_alias(row, interest_income_aliases)
+                if matched:
+                    label_index, _ = matched
+                    value = _extract_numeric_value(row, label_index, year_columns.get(year), unit_multiplier)
+                    if value is not None:
+                        return value
+        # fallback to general matching
+        return get_value(interest_income_aliases)
+
+    interest_income = _get_interest_income_prefer_net()
     other_operating_income = get_value(other_operating_income_aliases)
     impairment_losses = get_value(impairment_losses_aliases)
     interest_expense = get_value(interest_expense_aliases)
