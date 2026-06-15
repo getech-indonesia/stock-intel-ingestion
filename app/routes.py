@@ -14,6 +14,7 @@ from app.validators import (
 from app.services.corporate_action_service import fetch_and_build_corporate_action
 from app.services.financial_statement_service import fetch_and_build_financial_statement
 from app.services.financial_statement_v2_service import fetch_and_build_financial_statement_v2
+from app.services.income_statement_service import fetch_and_build_income_statement
 from app.services.emiten_service import scrape_emiten_detail, scrape_emiten_list
 from app.services.emiten_service import fetch_ajaib_stock_market
 from app.services.fundamental_service import fetch_and_build_fundamental
@@ -197,6 +198,29 @@ def get_stock_price():
         return jsonify({
             "status": "error",
             "message": "Failed to fetch stock price data from IDX. Please try again later.",
+        }), 502
+
+
+@bp.route("/income-statement", methods=["GET"])
+def get_income_statement():
+    query = request.args.to_dict(flat=True)
+    symbol = str(query.get("symbol") or "").strip().upper() or None
+    errors = []
+
+    if not symbol:
+        errors.append("'symbol' is required (e.g. 'BBRI')")
+    if errors:
+        return jsonify({"status": "error", "errors": errors}), 400
+
+    try:
+        result = fetch_and_build_income_statement(symbol)
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    except Exception:
+        return jsonify({
+            "status": "error",
+            "message": "Failed to fetch income statement data from Stockbit. Please try again later.",
         }), 502
 
 
