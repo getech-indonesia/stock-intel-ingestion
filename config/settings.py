@@ -10,6 +10,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.1")
 FLASK_DEBUG = os.getenv("FLASK_DEBUG", "false").lower() == "true"
 FLASK_PORT = int(os.getenv("FLASK_PORT", 5000))
 FLASK_RELOAD = os.getenv("FLASK_RELOAD", "true").lower() == "true"
+ENABLE_DATABASE = os.getenv("ENABLE_DATABASE", "false").lower() == "true"
 
 IDX_BASE_URL = "https://www.idx.co.id"
 IDX_API_URL = f"{IDX_BASE_URL}/api/FundamentalAnalysis"

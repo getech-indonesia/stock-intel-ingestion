@@ -14,6 +14,7 @@ from config.settings import (
     POSTGRES_TABLE,
     POSTGRES_URL,
     POSTGRES_USER,
+    ENABLE_DATABASE,
 )
 
 
@@ -144,10 +145,16 @@ def _ensure_schema() -> None:
 
 
 def init_db() -> None:
+    if not ENABLE_DATABASE:
+        logger.info("Database initialization skipped: ENABLE_DATABASE is false")
+        return
     _ensure_schema()
 
 
 def get_fundamental_result(symbol: str, year: int, quarter: str | None = None):
+    if not ENABLE_DATABASE:
+        return None
+    
     normalized_symbol = _normalize_symbol(symbol)
     normalized_quarter = _normalize_period(quarter) or "AUDIT"
 
@@ -207,6 +214,9 @@ def get_fundamental_result(symbol: str, year: int, quarter: str | None = None):
 
 
 def save_fundamental_result(payload: dict) -> None:
+    if not ENABLE_DATABASE:
+        return
+    
     meta = payload.get("meta") or {}
     financials = payload.get("financials") or {}
     market = payload.get("market") or {}
