@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, Union
 
 URL_TEMPLATE = "https://stockbit.com/symbol/{symbol}/financials"
 REPORT_TYPE_SELECTOR = 'select[data-cy="report-type"]'
-DATA_TABLE_SELECTOR = "#data_table_1"
 
 CHROME_EXECUTABLES = [
     Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
@@ -98,7 +97,7 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
             print(f"[4/6] Waiting for data table to load...")
             try:
                 page.wait_for_selector(
-                    f"{DATA_TABLE_SELECTOR} tbody tr td[data-raw]",
+                    "#data_table_1 tbody tr td[data-raw]",
                     timeout=30000,
                     state="attached"
                 )
@@ -118,27 +117,34 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
 
             print(f"[5/6] Extracting data via JavaScript...")
             
-            # Ekstraksi semua data sekaligus pakai JS biar cepat dan akurat
+            # JavaScript yang search SEMUA tabel di halaman
             js_script = """
             () => {
-                const table = document.querySelector('#data_table_1');
-                if (!table) return null;
+                // Get period keys from main table
+                const mainTable = document.querySelector('#data_table_1');
+                let periodKeys = [];
+                if (mainTable) {
+                    const headers = Array.from(mainTable.querySelectorAll('thead th[data-label]'));
+                    periodKeys = headers.map(th => th.getAttribute('data-label'));
+                }
                 
-                // Ambil semua header periode
-                const headers = Array.from(table.querySelectorAll('thead th[data-label]'));
-                const periodKeys = headers.map(th => th.getAttribute('data-label'));
-                
-                // Ambil semua data baris
+                // Search ALL tables on the page for data rows
+                const allTables = document.querySelectorAll('table');
                 const result = {};
-                const rows = table.querySelectorAll('tbody tr');
-                rows.forEach(row => {
-                    // Cek data-lang-1-full dulu (nama lengkap), fallback ke data-lang-1
-                    let span = row.querySelector('span[data-lang-1-full]') || row.querySelector('span[data-lang-1]');
-                    if (span) {
-                        let fieldName = span.getAttribute('data-lang-1-full') || span.getAttribute('data-lang-1');
-                        const tds = row.querySelectorAll('td[data-raw]');
-                        result[fieldName] = Array.from(tds).map(td => td.getAttribute('data-raw'));
-                    }
+                
+                allTables.forEach(table => {
+                    const rows = table.querySelectorAll('tbody tr');
+                    rows.forEach(row => {
+                        // Try data-lang-1-full first (complete name), fallback to data-lang-1
+                        let span = row.querySelector('span[data-lang-1-full]') || row.querySelector('span[data-lang-1]');
+                        if (span) {
+                            let fieldName = span.getAttribute('data-lang-1-full') || span.getAttribute('data-lang-1');
+                            const tds = row.querySelectorAll('td[data-raw]');
+                            if (tds.length > 0 && !result[fieldName]) {
+                                result[fieldName] = Array.from(tds).map(td => td.getAttribute('data-raw'));
+                            }
+                        }
+                    });
                 });
                 
                 return { periodKeys, result };
@@ -152,7 +158,7 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
             period_keys = raw_data['periodKeys']
             row_data = raw_data['result']
 
-            # Parse period keys (contoh: "Q126" -> Q1, 2026)
+            # Parse period keys
             periods_info = []
             for i, label in enumerate(period_keys):
                 match = re.match(r"(Q[1-4])(\d{2})", label)
@@ -173,6 +179,7 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
             print(f"   Found {len(periods_info)} periods: {[p['key'] for p in periods_info[:5]]}...")
 
             # Mapping nama field dari HTML ke key JSON
+            # FIX: Net Income sekarang ambil dari "Owners Of The Company"
             FIELD_MAP = {
                 "Total Revenue": "revenue",
                 "Total Cost Of Goods Sold": "cogs",
@@ -184,7 +191,7 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
                 "Non-Operating Income/Expense": "otherNonOperatingIncome",
                 "Income Before Tax": "pretaxIncome",
                 "Tax Expense": "incomeTaxExpense",
-                "Owners Of The Company": "netIncome",
+                "Owners Of The Company": "netIncome",  # FIXED: dari "Net Income For The Period"
                 "Non-Controlling Interests": "minorityInterest",
                 "EPS (Quarter)": "eps",
                 "Share Outstanding": "sharesWeightedAvg",
@@ -193,7 +200,10 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
 
             field_data = {v: {} for v in FIELD_MAP.values()}
 
-            # Masukkan data ke dalam dictionary berdasarkan period key
+            # Debug: print semua field yang ditemukan
+            print(f"   Fields found in HTML: {list(row_data.keys())}")
+
+            # Masukkan data ke dalam dictionary
             for html_name, py_name in FIELD_MAP.items():
                 if html_name in row_data:
                     values = row_data[html_name]
@@ -201,7 +211,7 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
                         if i < len(periods_info):
                             field_data[py_name][periods_info[i]["key"]] = _parse_numeric(val)
                 else:
-                    print(f"   WARNING: Row '{html_name}' not found in JS extraction")
+                    print(f"   WARNING: Row '{html_name}' not found")
 
             print(f"[6/6] Building result...")
 
