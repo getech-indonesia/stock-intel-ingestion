@@ -23,24 +23,6 @@ def _find_browser_executable() -> Optional[str]:
             return str(executable)
     return None
 
-ROW_SELECTORS = {
-    "revenue": "Total Revenue",
-    "cogs": "Total Cost Of Goods Sold",
-    "grossProfit": "Gross Profit",
-    "operatingExpenses": "Total Operating Expense",
-    "generalAdminExpenses": "General And Administrative Expense",
-    "interestExpense": "Interest Expense",
-    "interestIncome": "Interest Income",
-    "otherNonOperatingIncome": "Non-Operating Income/Expense",
-    "pretaxIncome": "Income Before Tax",
-    "incomeTaxExpense": "Tax Expense",
-    "netIncome": "Owners Of The Company",
-    "minorityInterest": "Non-Controlling Interests",
-    "eps": "EPS (Quarter)",
-    "sharesWeightedAvg": "Share Outstanding",
-    "ebitda": "EBITDA (Quarter)",
-}
-
 def _parse_numeric(raw_value: Optional[str]) -> Optional[Union[int, float]]:
     if raw_value is None:
         return None
@@ -72,7 +54,6 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
             profile_dir = Path("playwright_user_data")
             profile_dir.mkdir(exist_ok=True)
 
-            # === STEP 1: LAUNCH BROWSER ===
             print(f"[1/6] Launching browser...")
             executable_path = _find_browser_executable()
 
@@ -96,7 +77,6 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
 
             page = context.pages[0] if context.pages else context.new_page()
 
-            # === STEP 2: NAVIGATE KE HALAMAN ===
             print(f"[2/6] Navigating to {url}")
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -105,11 +85,6 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
             except PlaywrightTimeoutError:
                 print("   Network idle timeout, continuing anyway...")
 
-            debug_dir = profile_dir / "debug"
-            debug_dir.mkdir(exist_ok=True)
-            ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-
-            # === STEP 3: PILIH INCOME STATEMENT ===
             print(f"[3/6] Selecting Income Statement...")
             try:
                 page.wait_for_selector(REPORT_TYPE_SELECTOR, timeout=15000)
@@ -120,12 +95,8 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
                 print("   ERROR: Dropdown tidak ditemukan!")
                 raise ValueError("Report type dropdown not found")
 
-            # === STEP 4: TUNGGU DATA TABEL TERSEDIA DI DOM ===
             print(f"[4/6] Waiting for data table to load...")
             try:
-                # FIX: Gunakan state="attached" karena tabel di Stockbit kadang secara CSS 
-                # dianggap 'hidden' oleh Playwright (misal: display:none di wrapper), 
-                # padahal datanya sudah sukses di-render di atribut data-raw.
                 page.wait_for_selector(
                     f"{DATA_TABLE_SELECTOR} tbody tr td[data-raw]",
                     timeout=30000,
@@ -133,11 +104,9 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
                 )
                 print("   Table data detected in DOM!")
             except PlaywrightTimeoutError:
-                print("   ERROR: Table data not found in DOM!")
-                page.screenshot(path=str(debug_dir / f"{symbol}-no-table-{ts}.png"))
+                print("   ERROR: Table tidak muncul!")
                 raise ValueError("Data table did not load")
 
-            # Scroll ke tabel (jaga-jaga kalau ada mekanisme lazy load)
             page.evaluate("""
                 () => {
                     const table = document.querySelector('#data_table_1');
@@ -147,23 +116,50 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
             page.wait_for_timeout(1000)
             print("   Scrolled to table")
 
-            # === STEP 5: EKSTRAK DATA ===
-            print(f"[5/6] Extracting data...")
+            print(f"[5/6] Extracting data via JavaScript...")
+            
+            # Ekstraksi semua data sekaligus pakai JS biar cepat dan akurat
+            js_script = """
+            () => {
+                const table = document.querySelector('#data_table_1');
+                if (!table) return null;
+                
+                // Ambil semua header periode
+                const headers = Array.from(table.querySelectorAll('thead th[data-label]'));
+                const periodKeys = headers.map(th => th.getAttribute('data-label'));
+                
+                // Ambil semua data baris
+                const result = {};
+                const rows = table.querySelectorAll('tbody tr');
+                rows.forEach(row => {
+                    // Cek data-lang-1-full dulu (nama lengkap), fallback ke data-lang-1
+                    let span = row.querySelector('span[data-lang-1-full]') || row.querySelector('span[data-lang-1]');
+                    if (span) {
+                        let fieldName = span.getAttribute('data-lang-1-full') || span.getAttribute('data-lang-1');
+                        const tds = row.querySelectorAll('td[data-raw]');
+                        result[fieldName] = Array.from(tds).map(td => td.getAttribute('data-raw'));
+                    }
+                });
+                
+                return { periodKeys, result };
+            }
+            """
+            
+            raw_data = page.evaluate(js_script)
+            if not raw_data:
+                raise ValueError("Failed to extract data via JavaScript")
 
-            # Ambil semua periode dari header
-            headers = page.locator(f"{DATA_TABLE_SELECTOR} thead th[data-label]").all()
+            period_keys = raw_data['periodKeys']
+            row_data = raw_data['result']
+
+            # Parse period keys (contoh: "Q126" -> Q1, 2026)
             periods_info = []
-            for i, th in enumerate(headers):
-                label = th.get_attribute("data-label")
-                text = th.inner_text().strip()
-
-                if not label:
-                    continue
-
-                match = re.search(r"(Q[1-4])\s*(\d{4})", text, re.IGNORECASE)
+            for i, label in enumerate(period_keys):
+                match = re.match(r"(Q[1-4])(\d{2})", label)
                 if match:
                     period = match.group(1).upper()
-                    year = int(match.group(2))
+                    year_short = match.group(2)
+                    year = 2000 + int(year_short)
                     quarter = int(period[1])
                     periods_info.append({
                         "index": i,
@@ -176,32 +172,37 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
 
             print(f"   Found {len(periods_info)} periods: {[p['key'] for p in periods_info[:5]]}...")
 
-            if not periods_info:
-                raise ValueError("No periods found in table header")
+            # Mapping nama field dari HTML ke key JSON
+            FIELD_MAP = {
+                "Total Revenue": "revenue",
+                "Total Cost Of Goods Sold": "cogs",
+                "Gross Profit": "grossProfit",
+                "Total Operating Expense": "operatingExpenses",
+                "General And Administrative Expense": "generalAdminExpenses",
+                "Interest Expense": "interestExpense",
+                "Interest Income": "interestIncome",
+                "Non-Operating Income/Expense": "otherNonOperatingIncome",
+                "Income Before Tax": "pretaxIncome",
+                "Tax Expense": "incomeTaxExpense",
+                "Owners Of The Company": "netIncome",
+                "Non-Controlling Interests": "minorityInterest",
+                "EPS (Quarter)": "eps",
+                "Share Outstanding": "sharesWeightedAvg",
+                "EBITDA (Quarter)": "ebitda",
+            }
 
-            # Ambil data untuk setiap field
-            field_data = {field: {} for field in ROW_SELECTORS}
+            field_data = {v: {} for v in FIELD_MAP.values()}
 
-            for field, row_name in ROW_SELECTORS.items():
-                # Cari row dengan data-lang-1
-                xpath = f"//tr[.//span[@data-lang-1='{row_name}']]"
-                row = page.locator(xpath).first
+            # Masukkan data ke dalam dictionary berdasarkan period key
+            for html_name, py_name in FIELD_MAP.items():
+                if html_name in row_data:
+                    values = row_data[html_name]
+                    for i, val in enumerate(values):
+                        if i < len(periods_info):
+                            field_data[py_name][periods_info[i]["key"]] = _parse_numeric(val)
+                else:
+                    print(f"   WARNING: Row '{html_name}' not found in JS extraction")
 
-                if row.count() == 0:
-                    print(f"   WARNING: Row '{row_name}' not found")
-                    continue
-
-                tds = row.locator("td[data-raw]").all()
-
-                for p_info in periods_info:
-                    idx = p_info["index"]
-                    if idx < len(tds):
-                        raw_val = tds[idx].get_attribute("data-raw")
-                        field_data[field][p_info["key"]] = _parse_numeric(raw_val)
-                    else:
-                        field_data[field][p_info["key"]] = None
-
-            # === STEP 6: SUSUN HASIL ===
             print(f"[6/6] Building result...")
 
             result_data = []
