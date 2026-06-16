@@ -81,6 +81,8 @@ celerybeat-schedule
 .env
 .env.*
 
+playwright_user_data/
+
 # virtualenv
 venv/
 ENV/

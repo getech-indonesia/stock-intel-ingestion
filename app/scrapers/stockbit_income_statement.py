@@ -1,125 +1,57 @@
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 URL_TEMPLATE = "https://stockbit.com/symbol/{symbol}/financials"
 REPORT_TYPE_SELECTOR = 'select[data-cy="report-type"]'
-PERIOD_HEADER_SELECTOR = "//table[@id='data_table_1']/thead/tr/th[2]"
 DATA_TABLE_SELECTOR = "#data_table_1"
 
+CHROME_EXECUTABLES = [
+    Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+    Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+]
 BRAVE_EXECUTABLES = [
     Path(r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"),
     Path(r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe"),
 ]
+BROWSER_EXECUTABLES = CHROME_EXECUTABLES + BRAVE_EXECUTABLES
 
-SELECTORS = {
-    "revenue": "//span[@data-lang-0='Pemilik Entitas Induk']/ancestor::tr/td[2]",
-    "cogs": "//span[@data-lang-0='Total Beban Pokok Penjualan']/ancestor::tr/td[2]",
-    "grossProfit": "//span[@data-lang-0='Laba Kotor']/ancestor::tr/td[2]",
-    "operatingExpenses": "//span[@data-lang-0='Total Beban Usaha']/ancestor::tr/td[2]",
-    "generalAdminExpenses": "//span[@data-lang-0='Beban Umum Dan Administrasi']/ancestor::tr/td[2]",
-    "interestExpense": "//span[@data-lang-0='Beban Bunga']/ancestor::tr/td[2]",
-    "interestIncome": "//span[@data-lang-0='Pendapatan Bunga']/ancestor::tr/td[2]",
-    "otherNonOperatingIncome": "//span[@data-lang-0='Penghasilan/Beban Lain-Lain']/ancestor::tr/td[2]",
-    "pretaxIncome": "//span[@data-lang-0='Laba Sebelum Pajak']/ancestor::tr/td[2]",
-    "incomeTaxExpense": "//span[@data-lang-0='Beban Pajak Penghasilan']/ancestor::tr/td[2]",
-    "netIncome": "//span[@data-lang-0='Pemilik Entitas Induk']/ancestor::tr/td[2]",
-    "netIncomeAttributable": "//span[@data-lang-0='Pemilik Entitas Induk']/ancestor::tr/td[2]",
-    "minorityInterest": "//span[@data-lang-0='Kepentingan Non-Pegendali']/ancestor::tr/td[2]",
-    "eps": "//span[@data-lang-0='EPS (Quarter)']/ancestor::tr/td[2]",
-    "sharesWeightedAvg": "//span[@data-lang-0='Share Outstanding']/ancestor::tr/td[2]",
-    "ebitda": "//span[@data-lang-0='EBITDA (Quarter)']/ancestor::tr/td[2]",
+def _find_browser_executable() -> Optional[str]:
+    for executable in BROWSER_EXECUTABLES:
+        if executable.exists():
+            return str(executable)
+    return None
+
+ROW_SELECTORS = {
+    "revenue": "Total Revenue",
+    "cogs": "Total Cost Of Goods Sold",
+    "grossProfit": "Gross Profit",
+    "operatingExpenses": "Total Operating Expense",
+    "generalAdminExpenses": "General And Administrative Expense",
+    "interestExpense": "Interest Expense",
+    "interestIncome": "Interest Income",
+    "otherNonOperatingIncome": "Non-Operating Income/Expense",
+    "pretaxIncome": "Income Before Tax",
+    "incomeTaxExpense": "Tax Expense",
+    "netIncome": "Owners Of The Company",
+    "minorityInterest": "Non-Controlling Interests",
+    "eps": "EPS (Quarter)",
+    "sharesWeightedAvg": "Share Outstanding",
+    "ebitda": "EBITDA (Quarter)",
 }
-
-FISCAL_QUARTER_END = {
-    "Q1": "03-31",
-    "Q2": "06-30",
-    "Q3": "09-30",
-    "Q4": "12-31",
-}
-
 
 def _parse_numeric(raw_value: Optional[str]) -> Optional[Union[int, float]]:
     if raw_value is None:
         return None
-
     raw_text = str(raw_value).strip()
-    if not raw_text:
+    if not raw_text or raw_text.lower() in {"-", "—", "n/a", "nan"}:
         return None
-
-    if raw_text in {"-", "—", "n/a", "N/A", "NaN"}:
-        return None
-
-    negative = raw_text.startswith("(") and raw_text.endswith(")")
-    if negative:
-        raw_text = raw_text[1:-1]
-
-    raw_text = raw_text.replace("\xa0", "")
-    raw_text = re.sub(r"[^0-9,\.\-]", "", raw_text)
-    raw_text = raw_text.replace(" ", "")
-
-    if not raw_text:
-        return None
-
-    if raw_text.count(",") and raw_text.count("."):
-        raw_text = raw_text.replace(".", "").replace(",", ".")
-    elif raw_text.count(",") == 1 and raw_text.count(".") == 0:
-        integer_part, fractional_part = raw_text.split(",")
-        if len(fractional_part) <= 2:
-            raw_text = f"{integer_part}.{fractional_part}"
-        else:
-            raw_text = raw_text.replace(",", "")
-    elif raw_text.count(".") > 1:
-        raw_text = raw_text.replace(".", "")
-
     try:
-        if "." in raw_text:
-            value = float(raw_text)
-            return int(value) if value.is_integer() else value
-        return int(raw_text)
+        val = float(raw_text)
+        return int(val) if val.is_integer() else val
     except ValueError:
         return None
-
-
-def _parse_period_header(header_text: Optional[str]) -> tuple[str, int, int]:
-    if not header_text:
-        raise ValueError("Report period header is missing")
-
-    match = re.search(r"(Q[1-4])\s*(\d{4})", header_text, re.IGNORECASE)
-    if not match:
-        raise ValueError(f"Unable to parse report period from header '{header_text}'")
-
-    period = match.group(1).upper()
-    fiscal_year = int(match.group(2))
-    fiscal_quarter = int(period[1])
-    return period, fiscal_year, fiscal_quarter
-
-
-def _period_end_date(period: str, year: int) -> str:
-    if period not in FISCAL_QUARTER_END:
-        raise ValueError(f"Unknown fiscal quarter '{period}'")
-    return f"{year}-{FISCAL_QUARTER_END[period]}"
-
-
-def _get_xpath_text(page: Any, xpath: str) -> Optional[str]:
-    locator = page.locator(f"xpath={xpath}")
-    if locator.count() == 0:
-        return None
-
-    text = locator.first.text_content()
-    if text is None:
-        return None
-    return text.strip()
-
-
-def _collect_values(page: Any) -> Dict[str, Optional[Union[int, float]]]:
-    result: Dict[str, Optional[Union[int, float]]] = {}
-    for key, xpath in SELECTORS.items():
-        text = _get_xpath_text(page, xpath)
-        result[key] = _parse_numeric(text)
-    return result
-
 
 def scrape_stockbit_income_statement(symbol: str) -> dict:
     symbol = str(symbol).strip().upper()
@@ -130,76 +62,224 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
         from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
     except ImportError as exc:
         raise ImportError(
-            "Playwright is required for Stockbit scraping. Install it with `pip install playwright` "
-            "and then run `playwright install`.") from exc
+            "Playwright is required. Install with `pip install playwright` then `playwright install`."
+        ) from exc
 
     url = URL_TEMPLATE.format(symbol=symbol)
 
     try:
         with sync_playwright() as playwright:
-            executable_path = None
-            for brave_path in BRAVE_EXECUTABLES:
-                if brave_path.exists():
-                    executable_path = str(brave_path)
-                    break
+            profile_dir = Path("playwright_user_data")
+            profile_dir.mkdir(exist_ok=True)
+
+            # === STEP 1: LAUNCH BROWSER (Setup asli lu, gak gw ubah) ===
+            print(f"[1/6] Launching browser...")
+            executable_path = _find_browser_executable()
 
             if executable_path:
-                browser = playwright.chromium.launch(
-                    headless=False,
+                print(f"   Using: {executable_path}")
+                context = playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(profile_dir),
                     executable_path=executable_path,
+                    headless=False,
+                    args=["--disable-blink-features=AutomationControlled"],
+                    ignore_default_args=["--enable-automation"],
                 )
             else:
-                browser = playwright.chromium.launch(headless=False)
+                print("   Using default Chromium")
+                context = playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(profile_dir),
+                    headless=False,
+                    args=["--disable-blink-features=AutomationControlled"],
+                    ignore_default_args=["--enable-automation"],
+                )
 
-            page = browser.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_selector(REPORT_TYPE_SELECTOR, timeout=30000)
-            page.select_option(REPORT_TYPE_SELECTOR, "1")
-            page.wait_for_selector(f"xpath={PERIOD_HEADER_SELECTOR}", timeout=30000)
-            page.wait_for_timeout(1000)
+            page = context.pages[0] if context.pages else context.new_page()
 
-            period_header_text = _get_xpath_text(page, PERIOD_HEADER_SELECTOR)
-            period, fiscal_year, fiscal_quarter = _parse_period_header(period_header_text)
-            values = _collect_values(page)
+            # === STEP 2: NAVIGATE KE HALAMAN ===
+            print(f"[2/6] Navigating to {url}")
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                print("   DOM loaded, waiting for network idle...")
+                page.wait_for_load_state("networkidle", timeout=30000)
+            except PlaywrightTimeoutError:
+                print("   Network idle timeout, continuing anyway...")
 
-            if not any(values.values()):
-                raise ValueError("Income statement data could not be extracted from Stockbit")
+            debug_dir = profile_dir / "debug"
+            debug_dir.mkdir(exist_ok=True)
+            ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            page.screenshot(path=str(debug_dir / f"{symbol}-after-nav-{ts}.png"))
+            print(f"   Screenshot saved: {debug_dir / f'{symbol}-after-nav-{ts}.png'}")
+
+            # === STEP 3: PILIH INCOME STATEMENT + SCROLL ===
+            print(f"[3/6] Selecting Income Statement...")
+            try:
+                page.wait_for_selector(REPORT_TYPE_SELECTOR, timeout=15000)
+                print("   Dropdown found!")
+
+                # Pilih option value="1" (Income Statement)
+                page.select_option(REPORT_TYPE_SELECTOR, "1")
+                print("   Selected 'Income Statement'")
+
+                # Tunggu network idle setelah pilih option (biar AJAX request selesai)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                except PlaywrightTimeoutError:
+                    print("   Network idle timeout after select, continuing...")
+
+                # Scroll sedikit ke bawah biar keliatan behaviour bot lagi scraping
+                page.evaluate("window.scrollBy(0, 400);")
+                print("   Scrolled down to show table...")
+
+            except PlaywrightTimeoutError:
+                print("   ERROR: Dropdown tidak ditemukan!")
+                raise ValueError("Report type dropdown not found")
+
+            # === STEP 4: TUNGGU TABEL MUNCUL (FIXED) ===
+            print(f"[4/6] Waiting for data table to load...")
+            try:
+                # Tunggu wrapper tabel muncul sesuai tag HTML yang lu kasih
+                page.wait_for_selector(
+                    'div[data-cy="financial-table"]',
+                    timeout=15000,
+                    state="visible"
+                )
+                
+                # Tunggu sampai row "Total Revenue" muncul. 
+                # Ini foolproof buat mastiin data Income Statement bener-bener udah ke-render
+                page.wait_for_selector(
+                    'span[data-lang-1="Total Revenue"]',
+                    timeout=15000,
+                    state="visible"
+                )
+                print("   Table rows detected!")
+            except PlaywrightTimeoutError:
+                print("   ERROR: Table tidak muncul!")
+                page.screenshot(path=str(debug_dir / f"{symbol}-no-table-{ts}.png"))
+                raise ValueError("Data table did not load")
+
+            # === STEP 5: EKSTRAK DATA ===
+            print(f"[5/6] Extracting data...")
+
+            # Ambil semua periode dari header
+            headers = page.locator(f"{DATA_TABLE_SELECTOR} thead th[data-label]").all()
+            periods_info = []
+            for i, th in enumerate(headers):
+                label = th.get_attribute("data-label")  # contoh: "Q126"
+                text = th.inner_text().strip()  # contoh: "Q1 2026"
+
+                if not label:
+                    continue
+
+                match = re.search(r"(Q[1-4])\s*(\d{4})", text, re.IGNORECASE)
+                if match:
+                    period = match.group(1).upper()
+                    year = int(match.group(2))
+                    quarter = int(period[1])
+                    periods_info.append({
+                        "index": i,
+                        "label": label,
+                        "period": period,
+                        "fiscalYear": year,
+                        "fiscalQuarter": quarter,
+                        "key": f"{period}_{year}"
+                    })
+
+            print(f"   Found {len(periods_info)} periods: {[p['key'] for p in periods_info[:5]]}...")
+
+            if not periods_info:
+                raise ValueError("No periods found in table header")
+
+            # Ambil data untuk setiap field
+            field_data = {field: {} for field in ROW_SELECTORS}
+
+            for field, row_name in ROW_SELECTORS.items():
+                # Cari row dengan data-lang-1
+                xpath = f"//tr[.//span[@data-lang-1='{row_name}']]"
+                row = page.locator(xpath).first
+
+                if row.count() == 0:
+                    print(f"   WARNING: Row '{row_name}' not found")
+                    continue
+
+                tds = row.locator("td[data-raw]").all()
+
+                for p_info in periods_info:
+                    idx = p_info["index"]
+                    if idx < len(tds):
+                        raw_val = tds[idx].get_attribute("data-raw")
+                        field_data[field][p_info["key"]] = _parse_numeric(raw_val)
+                    else:
+                        field_data[field][p_info["key"]] = None
+
+            # === STEP 6: SUSUN HASIL ===
+            print(f"[6/6] Building result...")
+
+            result_data = []
+            for p_info in periods_info:
+                key = p_info["key"]
+
+                # Hitung Revenue Growth YoY
+                prev_year = p_info["fiscalYear"] - 1
+                prev_key = f"{p_info['period']}_{prev_year}"
+
+                current_rev = field_data["revenue"].get(key)
+                prev_rev = field_data["revenue"].get(prev_key)
+
+                revenue_growth_yoy = None
+                if current_rev is not None and prev_rev is not None and prev_rev != 0:
+                    revenue_growth_yoy = round(((current_rev - prev_rev) / abs(prev_rev)) * 100, 2)
+
+                # Hitung Effective Tax Rate
+                pretax = field_data["pretaxIncome"].get(key)
+                tax_exp = field_data["incomeTaxExpense"].get(key)
+                effective_tax_rate = None
+                if pretax is not None and pretax != 0 and tax_exp is not None:
+                    effective_tax_rate = round((abs(tax_exp) / abs(pretax)) * 100, 2)
+
+                item = {
+                    "period": p_info["period"],
+                    "fiscalYear": p_info["fiscalYear"],
+                    "fiscalQuarter": p_info["fiscalQuarter"],
+                    "currency": "IDR",
+                    "auditStatus": "UNAUDITED",
+                    "revenue": field_data["revenue"].get(key),
+                    "revenueGrowthYoY": revenue_growth_yoy,
+                    "cogs": field_data["cogs"].get(key),
+                    "grossProfit": field_data["grossProfit"].get(key),
+                    "operatingExpenses": field_data["operatingExpenses"].get(key),
+                    "sellingExpenses": None,
+                    "generalAdminExpenses": field_data["generalAdminExpenses"].get(key),
+                    "rdExpenses": None,
+                    "depreciationAmort": None,
+                    "ebit": None,
+                    "ebitda": field_data["ebitda"].get(key),
+                    "operatingIncome": None,
+                    "interestExpense": field_data["interestExpense"].get(key),
+                    "interestIncome": field_data["interestIncome"].get(key),
+                    "otherNonOperatingIncome": field_data["otherNonOperatingIncome"].get(key),
+                    "pretaxIncome": pretax,
+                    "incomeTaxExpense": tax_exp,
+                    "effectiveTaxRate": effective_tax_rate,
+                    "netIncome": field_data["netIncome"].get(key),
+                    "netIncomeAttributable": field_data["netIncome"].get(key),
+                    "minorityInterest": field_data["minorityInterest"].get(key),
+                    "eps": field_data["eps"].get(key),
+                    "epsDiluted": None,
+                    "sharesWeightedAvg": field_data["sharesWeightedAvg"].get(key),
+                }
+                result_data.append(item)
+
+            print(f"   Done! Extracted {len(result_data)} periods")
+            context.close()
 
             return {
                 "status": "ok",
                 "symbol": symbol,
-                "period": period,
-                "fiscalYear": fiscal_year,
-                "fiscalQuarter": fiscal_quarter,
-                "periodEndDate": _period_end_date(period, fiscal_year),
-                "currency": "IDR",
-                "auditStatus": "UNAUDITED",
-                "revenue": values.get("revenue"),
-                "revenueGrowthYoY": None,
-                "cogs": values.get("cogs"),
-                "grossProfit": values.get("grossProfit"),
-                "operatingExpenses": values.get("operatingExpenses"),
-                "sellingExpenses": None,
-                "generalAdminExpenses": values.get("generalAdminExpenses"),
-                "rdExpenses": None,
-                "depreciationAmort": None,
-                "ebit": None,
-                "ebitda": values.get("ebitda"),
-                "operatingIncome": None,
-                "interestExpense": values.get("interestExpense"),
-                "interestIncome": values.get("interestIncome"),
-                "otherNonOperatingIncome": values.get("otherNonOperatingIncome"),
-                "pretaxIncome": values.get("pretaxIncome"),
-                "incomeTaxExpense": values.get("incomeTaxExpense"),
-                "effectiveTaxRate": None,
-                "netIncome": values.get("netIncome"),
-                "netIncomeAttributable": values.get("netIncomeAttributable"),
-                "minorityInterest": values.get("minorityInterest"),
-                "eps": values.get("eps"),
-                "epsDiluted": None,
-                "sharesWeightedAvg": values.get("sharesWeightedAvg"),
+                "data": result_data
             }
+
     except PlaywrightTimeoutError as exc:
-        raise ValueError(f"Timeout while scraping Stockbit for symbol {symbol}: {exc}") from exc
+        raise ValueError(f"Timeout: {exc}") from exc
     except Exception as exc:
-        raise ValueError(f"Failed to scrape Stockbit income statement: {exc}") from exc
+        raise ValueError(f"Failed: {exc}") from exc
