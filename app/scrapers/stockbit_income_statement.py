@@ -72,7 +72,7 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
             profile_dir = Path("playwright_user_data")
             profile_dir.mkdir(exist_ok=True)
 
-            # === STEP 1: LAUNCH BROWSER (Setup asli lu, gak gw ubah) ===
+            # === STEP 1: LAUNCH BROWSER ===
             print(f"[1/6] Launching browser...")
             executable_path = _find_browser_executable()
 
@@ -108,55 +108,44 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
             debug_dir = profile_dir / "debug"
             debug_dir.mkdir(exist_ok=True)
             ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-            page.screenshot(path=str(debug_dir / f"{symbol}-after-nav-{ts}.png"))
-            print(f"   Screenshot saved: {debug_dir / f'{symbol}-after-nav-{ts}.png'}")
 
-            # === STEP 3: PILIH INCOME STATEMENT + SCROLL ===
+            # === STEP 3: PILIH INCOME STATEMENT ===
             print(f"[3/6] Selecting Income Statement...")
             try:
                 page.wait_for_selector(REPORT_TYPE_SELECTOR, timeout=15000)
                 print("   Dropdown found!")
-
-                # Pilih option value="1" (Income Statement)
                 page.select_option(REPORT_TYPE_SELECTOR, "1")
                 print("   Selected 'Income Statement'")
-
-                # Tunggu network idle setelah pilih option (biar AJAX request selesai)
-                try:
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                except PlaywrightTimeoutError:
-                    print("   Network idle timeout after select, continuing...")
-
-                # Scroll sedikit ke bawah biar keliatan behaviour bot lagi scraping
-                page.evaluate("window.scrollBy(0, 400);")
-                print("   Scrolled down to show table...")
-
             except PlaywrightTimeoutError:
                 print("   ERROR: Dropdown tidak ditemukan!")
                 raise ValueError("Report type dropdown not found")
 
-            # === STEP 4: TUNGGU TABEL MUNCUL (FIXED) ===
+            # === STEP 4: TUNGGU DATA TABEL TERSEDIA DI DOM ===
             print(f"[4/6] Waiting for data table to load...")
             try:
-                # Tunggu wrapper tabel muncul sesuai tag HTML yang lu kasih
+                # FIX: Gunakan state="attached" karena tabel di Stockbit kadang secara CSS 
+                # dianggap 'hidden' oleh Playwright (misal: display:none di wrapper), 
+                # padahal datanya sudah sukses di-render di atribut data-raw.
                 page.wait_for_selector(
-                    'div[data-cy="financial-table"]',
-                    timeout=15000,
-                    state="visible"
+                    f"{DATA_TABLE_SELECTOR} tbody tr td[data-raw]",
+                    timeout=30000,
+                    state="attached"
                 )
-                
-                # Tunggu sampai row "Total Revenue" muncul. 
-                # Ini foolproof buat mastiin data Income Statement bener-bener udah ke-render
-                page.wait_for_selector(
-                    'span[data-lang-1="Total Revenue"]',
-                    timeout=15000,
-                    state="visible"
-                )
-                print("   Table rows detected!")
+                print("   Table data detected in DOM!")
             except PlaywrightTimeoutError:
-                print("   ERROR: Table tidak muncul!")
+                print("   ERROR: Table data not found in DOM!")
                 page.screenshot(path=str(debug_dir / f"{symbol}-no-table-{ts}.png"))
                 raise ValueError("Data table did not load")
+
+            # Scroll ke tabel (jaga-jaga kalau ada mekanisme lazy load)
+            page.evaluate("""
+                () => {
+                    const table = document.querySelector('#data_table_1');
+                    if (table) table.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            """)
+            page.wait_for_timeout(1000)
+            print("   Scrolled to table")
 
             # === STEP 5: EKSTRAK DATA ===
             print(f"[5/6] Extracting data...")
@@ -165,8 +154,8 @@ def scrape_stockbit_income_statement(symbol: str) -> dict:
             headers = page.locator(f"{DATA_TABLE_SELECTOR} thead th[data-label]").all()
             periods_info = []
             for i, th in enumerate(headers):
-                label = th.get_attribute("data-label")  # contoh: "Q126"
-                text = th.inner_text().strip()  # contoh: "Q1 2026"
+                label = th.get_attribute("data-label")
+                text = th.inner_text().strip()
 
                 if not label:
                     continue
