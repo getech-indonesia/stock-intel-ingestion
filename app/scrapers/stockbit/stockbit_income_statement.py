@@ -30,10 +30,26 @@ class StockbitIncomeStatementScraper(BaseStockbitScraper):
             if self.session_handler.check_session_expired():
                 if not self.session_handler.handle_session_with_retry():
                     raise ValueError("Session expired dan user tidak login")
+                
+                # FIX: Setelah login berhasil, navigate ulang ke URL symbol
+                print(f"   Resuming: Navigating back to {self.symbol}...")
+                self.navigate_to_symbol()
+                self.page.wait_for_timeout(3000)  # Tunggu halaman stabilize
             
             # Select Income Statement
             print(f"[3/7] Selecting Income Statement...")
             self.select_report_type("1")
+            
+            # Check session setelah select
+            if self.session_handler.check_session_expired():
+                if not self.session_handler.handle_session_with_retry():
+                    raise ValueError("Session expired setelah select income statement")
+                
+                # FIX: Resume lagi setelah login
+                print(f"   Resuming: Navigating back to {self.symbol}...")
+                self.navigate_to_symbol()
+                self.page.wait_for_timeout(3000)
+                self.select_report_type("1")  # Select lagi
             
             # Wait for table
             print(f"[4/7] Waiting for data table...")
