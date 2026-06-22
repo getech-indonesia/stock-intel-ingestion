@@ -1,9 +1,13 @@
+import logging
 from typing import Any, Dict, List
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .base_scraper import BaseStockbitScraper
 from .stockbit_session import StockbitSessionHandler
 from .config import INCOME_STATEMENT_FIELDS, DATA_TABLE_SELECTOR
+
+
+logger = logging.getLogger(__name__)
 
 
 class StockbitIncomeStatementScraper(BaseStockbitScraper):
@@ -68,6 +72,9 @@ class StockbitIncomeStatementScraper(BaseStockbitScraper):
             periods = self.extract_periods_from_header()
             
             print(f"   Found {len(periods)} periods: {[p['key'] for p in periods[:5]]}...")
+            if not periods:
+                print(f"[WARN] Income statement period headers are empty for symbol {self.symbol}", flush=True)
+                logger.warning("Income statement period headers are empty for symbol %s", self.symbol)
             
             # Map data
             field_data = self._map_field_data(raw_data, periods)
@@ -75,6 +82,9 @@ class StockbitIncomeStatementScraper(BaseStockbitScraper):
             # Build result
             print(f"[6/7] Building result...")
             result_data = self._build_result(field_data, periods)
+            if not result_data:
+                print(f"[WARN] Income statement scrape produced empty data for symbol {self.symbol}", flush=True)
+                logger.warning("Income statement scrape produced empty data for symbol %s", self.symbol)
             
             print(f"[7/7] Done! Extracted {len(result_data)} periods")
             
@@ -107,6 +117,15 @@ class StockbitIncomeStatementScraper(BaseStockbitScraper):
                         field_data[py_name][periods[i]["key"]] = self._parse_numeric(val)
             else:
                 print(f"   WARNING: Row '{html_name}' not found")
+                print(
+                    f"[WARN] Income statement row '{html_name}' not found for symbol {self.symbol}",
+                    flush=True,
+                )
+                logger.warning(
+                    "Income statement row '%s' not found for symbol %s",
+                    html_name,
+                    self.symbol,
+                )
         
         return field_data
     

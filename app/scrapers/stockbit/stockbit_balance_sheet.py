@@ -1,9 +1,13 @@
+import logging
 from typing import Any, Dict, List, Optional, Union
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .base_scraper import BaseStockbitScraper
 from .stockbit_session import StockbitSessionHandler
 from .config import BALANCE_SHEET_FIELDS, DATA_TABLE_SELECTOR
+
+
+logger = logging.getLogger(__name__)
 
 
 class StockbitBalanceSheetScraper(BaseStockbitScraper):
@@ -70,10 +74,16 @@ class StockbitBalanceSheetScraper(BaseStockbitScraper):
             
             periods = self.extract_periods_from_header()
             print(f"   Found {len(periods)} periods: {[p['key'] for p in periods[:5]]}...")
+            if not periods:
+                print(f"[WARN] Balance sheet period headers are empty for symbol {self.symbol}", flush=True)
+                logger.warning("Balance sheet period headers are empty for symbol %s", self.symbol)
             
             # Build result
             print(f"[6/7] Building result...")
             result_data = self._build_result(raw_data, periods, currency)
+            if not result_data:
+                print(f"[WARN] Balance sheet scrape produced empty data for symbol {self.symbol}", flush=True)
+                logger.warning("Balance sheet scrape produced empty data for symbol %s", self.symbol)
             
             print(f"[7/7] Done! Extracted {len(result_data)} periods")
             
@@ -166,6 +176,9 @@ class StockbitBalanceSheetScraper(BaseStockbitScraper):
         raw_data = self.page.evaluate(js_script)
         if not raw_data:
             raise ValueError("Failed to extract data via JavaScript")
+        if not raw_data.get("result"):
+            print(f"[WARN] Balance sheet raw extraction returned empty result for symbol {self.symbol}", flush=True)
+            logger.warning("Balance sheet raw extraction returned empty result for symbol %s", self.symbol)
         return raw_data
 
     def _get_row_value(self, raw_data: Dict, id_key: str = None, en_key: str = None, text_key: str = None) -> List[Any]:
