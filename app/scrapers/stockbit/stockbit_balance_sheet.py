@@ -1,7 +1,9 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Union
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
 from .base_scraper import BaseStockbitScraper
 from .stockbit_session import StockbitSessionHandler
-from .config import BALANCE_SHEET_FIELDS
+from .config import BALANCE_SHEET_FIELDS, DATA_TABLE_SELECTOR
 
 
 class StockbitBalanceSheetScraper(BaseStockbitScraper):
@@ -15,38 +17,65 @@ class StockbitBalanceSheetScraper(BaseStockbitScraper):
     def scrape(self) -> Dict:
         """Main scraping method untuk Balance Sheet"""
         try:
-            print(f"[1/6] Launching browser...")
+            # Launch browser
+            print(f"[1/7] Launching browser...")
             self.launch_browser()
             self.session_handler = StockbitSessionHandler(self.page)
             
-            print(f"[2/6] Navigating to {self.symbol}...")
+            # Navigate
+            print(f"[2/7] Navigating to {self.symbol}...")
             self.navigate_to_symbol()
             
+            # Check session setelah navigate
             if self.session_handler.check_session_expired():
                 if not self.session_handler.handle_session_with_retry():
-                    raise ValueError("Session expired")
+                    raise ValueError("Session expired dan user tidak login")
+                
+                # FIX: Setelah login berhasil, navigate ulang ke URL symbol
+                print(f"   Resuming: Navigating back to {self.symbol}...")
+                self.navigate_to_symbol()
+                self.page.wait_for_timeout(3000)  # Tunggu halaman stabilize
             
-            print(f"[3/6] Selecting Balance Sheet...")
+            # Select Balance Sheet
+            print(f"[3/7] Selecting Balance Sheet...")
             self.select_report_type("2")
             
-            print(f"[4/6] Waiting for data table...")
+            # Check session setelah select
+            if self.session_handler.check_session_expired():
+                if not self.session_handler.handle_session_with_retry():
+                    raise ValueError("Session expired setelah select balance sheet")
+                
+                # FIX: Resume lagi setelah login
+                print(f"   Resuming: Navigating back to {self.symbol}...")
+                self.navigate_to_symbol()
+                self.page.wait_for_timeout(3000)
+                self.select_report_type("2")  # Select lagi
+            
+            # Wait for table
+            print(f"[4/7] Waiting for data table...")
             self.session_handler.wait_for_element_with_session_check(
                 f"{DATA_TABLE_SELECTOR} tbody tr td[data-raw]",
                 timeout=30000
             )
+            print("   Table data detected!")
             
+            # Scroll to table
             self.scroll_to_table()
             
-            print(f"[5/6] Extracting data...")
-            raw_data = self.extract_all_data()
+            # Extract data
+            print(f"[5/7] Extracting data...")
+            raw_extracted = self._extract_balance_sheet_data()
+            raw_data = raw_extracted.get("result", {})
+            currency = raw_extracted.get("currency", "IDR")
+            
             periods = self.extract_periods_from_header()
+            print(f"   Found {len(periods)} periods: {[p['key'] for p in periods[:5]]}...")
             
-            print(f"   Found {len(periods)} periods")
+            # Build result
+            print(f"[6/7] Building result...")
+            result_data = self._build_result(raw_data, periods, currency)
             
-            field_data = self._map_field_data(raw_data, periods)
-            
-            print(f"[6/6] Building result...")
-            result_data = self._build_result(field_data, periods)
+            print(f"[7/7] Done! Extracted {len(result_data)} periods")
             
             return {
                 "status": "ok",
@@ -54,48 +83,247 @@ class StockbitBalanceSheetScraper(BaseStockbitScraper):
                 "data": result_data
             }
             
+        except PlaywrightTimeoutError as exc:
+            raise ValueError(f"Timeout: {exc}") from exc
         except Exception as exc:
             raise ValueError(f"Failed: {exc}") from exc
         finally:
             self.close_browser()
-    
-    def _map_field_data(self, raw_data: Dict, periods: List[Dict]) -> Dict:
-        """Map raw data ke field dictionary"""
-        field_data = {field: {} for field in self.field_mapping.keys()}
+
+    def _extract_balance_sheet_data(self) -> Dict[str, Any]:
+        """Custom extractor to capture data-value-idr and section tracking"""
+        js_script = """
+        () => {
+            const result = {};
+            const allTables = document.querySelectorAll('table');
+            let currentSection = "";
+            
+            allTables.forEach(table => {
+                const rows = table.querySelectorAll('tbody tr');
+                rows.forEach(row => {
+                    let span = row.querySelector('span[data-lang-1-full]') || 
+                               row.querySelector('span[data-lang-1]');
+                    
+                    let idName = "";
+                    let enName = "";
+                    if (span) {
+                        idName = span.getAttribute('data-lang-0-full') || span.getAttribute('data-lang-0') || "";
+                        enName = span.getAttribute('data-lang-1-full') || span.getAttribute('data-lang-1') || "";
+                    }
+                    
+                    let tdFirst = row.querySelector('td');
+                    let rowText = tdFirst ? tdFirst.innerText.trim() : "";
+                    
+                    // Track sections
+                    if (enName === "Assets") currentSection = "assets";
+                    else if (enName === "Current Assets") currentSection = "current_assets";
+                    else if (enName === "Non-Current Assets") currentSection = "non_current_assets";
+                    else if (enName === "Current Liabilities") currentSection = "current_liabilities";
+                    else if (enName === "Non-Current Liabilities") currentSection = "non_current_liabilities";
+                    else if (enName === "Equity") currentSection = "equity";
+                    
+                    const tds = row.querySelectorAll('td[data-value-idr]');
+                    if (tds.length === 0) return;
+                    
+                    const values = Array.from(tds).map(td => td.getAttribute('data-value-idr'));
+                    
+                    const isTotalRow = row.classList.contains('total') || rowText.toLowerCase().startsWith('total ');
+                    
+                    const addResult = (key, isTotal) => {
+                        if (!key) return;
+                        key = key.trim();
+                        if (!result[key] || isTotal) {
+                            result[key] = values;
+                        }
+                    };
+                    
+                    // Map special Others rows based on current section
+                    if (rowText.toLowerCase() === "others") {
+                        if (currentSection === "current_assets") {
+                            addResult("Others_Current_Assets", true);
+                        } else if (currentSection === "non_current_assets") {
+                            addResult("Others_Non_Current_Assets", true);
+                        } else if (currentSection === "equity") {
+                            addResult("Others_Equity", true);
+                        }
+                    } else {
+                        if (idName) addResult("ID:" + idName, isTotalRow);
+                        if (enName) addResult("EN:" + enName, isTotalRow);
+                        if (rowText) addResult("TEXT:" + rowText, isTotalRow);
+                    }
+                });
+            });
+            
+            let currency = "IDR";
+            const currencyInput = document.querySelector('input[name="selected_currency"]');
+            if (currencyInput && currencyInput.value) {
+                currency = currencyInput.value.toUpperCase();
+            }
+            
+            return { result, currency };
+        }
+        """
+        raw_data = self.page.evaluate(js_script)
+        if not raw_data:
+            raise ValueError("Failed to extract data via JavaScript")
+        return raw_data
+
+    def _get_row_value(self, raw_data: Dict, id_key: str = None, en_key: str = None, text_key: str = None) -> List[Any]:
+        """Retrieve values from JavaScript-extracted dictionary"""
+        if id_key and f"ID:{id_key}" in raw_data:
+            return raw_data[f"ID:{id_key}"]
+        if en_key and f"EN:{en_key}" in raw_data:
+            return raw_data[f"EN:{en_key}"]
+        if text_key and f"TEXT:{text_key}" in raw_data:
+            return raw_data[f"TEXT:{text_key}"]
+        if text_key and text_key in raw_data:
+            return raw_data[text_key]
+        return []
+
+    def _get_value_at_index(self, values: List[Any], index: int) -> Optional[Union[int, float]]:
+        """Retrieve and parse numeric value at a specific column index"""
+        if index < len(values):
+            return self._parse_numeric(values[index])
+        return None
+
+    def _safe_subtract(self, total: Optional[Union[int, float]], *parts: Optional[Union[int, float]]) -> Optional[Union[int, float]]:
+        """Calculate subtraction safely with optional/None values"""
+        if total is None:
+            return None
+        res = total
+        for part in parts:
+            if part is not None:
+                res -= part
+        return res
+
+    def _build_result(self, raw_data: Dict, periods: List[Dict], currency: str) -> List[Dict]:
+        """Build results for each period"""
+        # Fetch all rows first
+        cash_list = self._get_row_value(raw_data, id_key="Kas Dan Setara Kas", en_key="Cash And Cash Equivalents")
+        receivables_list = self._get_row_value(raw_data, id_key="Piutang Usaha", en_key="Trade Receivables")
+        inventory_list = self._get_row_value(raw_data, id_key="Persediaan", en_key="Inventories")
+        total_curr_assets_list = self._get_row_value(raw_data, id_key="Aset Lancar", en_key="Current Assets")
         
-        for py_name, html_name in self.field_mapping.items():
-            if html_name in raw_data.get("result", {}):
-                values = raw_data["result"][html_name]
-                for i, val in enumerate(values):
-                    if i < len(periods):
-                        field_data[py_name][periods[i]["key"]] = self._parse_numeric(val)
+        ppe_list = self._get_row_value(raw_data, id_key="Aset Tetap", en_key="Property, Plant And Equipment")
+        intangible_list = self._get_row_value(raw_data, id_key="Aset Tak Berwujud", en_key="Intangible Assets")
+        goodwill_list = self._get_row_value(raw_data, id_key="Goodwill", en_key="Goodwill")
+        total_non_curr_assets_list = self._get_row_value(raw_data, id_key="Aset Tidak Lancar", en_key="Non-Current Assets")
+        total_assets_list = self._get_row_value(raw_data, id_key="Aset", en_key="Assets")
         
-        return field_data
-    
-    def _build_result(self, field_data: Dict, periods: List[Dict]) -> List[Dict]:
-        """Build result list"""
+        short_term_debt_list = self._get_row_value(raw_data, id_key="Bagian Lancar Atas Liabilitas Jangka Panjang", en_key="Current Portion Of Long-Term Debt")
+        accounts_payable_list = self._get_row_value(raw_data, id_key="Utang Usaha", en_key="Trade Payables")
+        total_curr_liab_list = self._get_row_value(raw_data, id_key="Liabilitas Jangka Pendek", en_key="Current Liabilities")
+        
+        long_term_debt_list = self._get_row_value(raw_data, id_key="Liabilitas Jangka Panjang", en_key="Non-Current Liabilities")
+        deferred_tax_liab_list = self._get_row_value(raw_data, id_key="Liabilitas Pajak Tangguhan", en_key="Deferred Tax Liabilities")
+        total_non_curr_liab_list = self._get_row_value(raw_data, id_key="Liabilitas Jangka Panjang", en_key="Non-Current Liabilities")
+        total_liabilities_list = self._get_row_value(raw_data, id_key="Liabilitas", en_key="Liabilities")
+        
+        common_stock_list = self._get_row_value(raw_data, id_key="Modal Saham", en_key="Capital Stock")
+        apic_list = self._get_row_value(raw_data, id_key="Tambahan Modal Disetor", en_key="Additional Paid-Up Capital")
+        retained_earnings_list = self._get_row_value(raw_data, id_key="Saldo Laba", en_key="Retained Earnings")
+        other_equity_list = self._get_row_value(raw_data, text_key="Others_Equity")
+        minority_interest_list = self._get_row_value(raw_data, id_key="Kepentingan Non Pengendali", en_key="Non-Controlling Interests")
+        total_equity_list = self._get_row_value(raw_data, id_key="Ekuitas", en_key="Equity")
+        
+        bvps_list = self._get_row_value(raw_data, id_key="Book Value Per Share (Quarter)", en_key="Book Value Per Share (Quarter)")
+        net_debt_list = self._get_row_value(raw_data, id_key="Net Debt (Quarter)", en_key="Net Debt (Quarter)")
+        working_capital_list = self._get_row_value(raw_data, id_key="Working Capital (Quarter)", en_key="Working Capital (Quarter)")
+
         result_data = []
-        
         for p_info in periods:
-            key = p_info["key"]
+            idx = p_info["index"]
+            
+            cash = self._get_value_at_index(cash_list, idx)
+            accounts_receivable = self._get_value_at_index(receivables_list, idx)
+            inventory = self._get_value_at_index(inventory_list, idx)
+            total_current_assets = self._get_value_at_index(total_curr_assets_list, idx)
+            other_current_assets = self._safe_subtract(total_current_assets, cash, accounts_receivable, inventory)
+            
+            property_plant_equipment = self._get_value_at_index(ppe_list, idx)
+            intangible_assets = self._get_value_at_index(intangible_list, idx)
+            goodwill = self._get_value_at_index(goodwill_list, idx)
+            total_non_current_assets = self._get_value_at_index(total_non_curr_assets_list, idx)
+            other_non_current_assets = self._safe_subtract(total_non_current_assets, property_plant_equipment, intangible_assets, goodwill)
+            total_assets = self._get_value_at_index(total_assets_list, idx)
+            
+            short_term_debt = self._get_value_at_index(short_term_debt_list, idx)
+            accounts_payable = self._get_value_at_index(accounts_payable_list, idx)
+            total_current_liabilities = self._get_value_at_index(total_curr_liab_list, idx)
+            other_current_liabilities = self._safe_subtract(total_current_liabilities, short_term_debt, accounts_payable)
+            
+            long_term_debt = self._get_value_at_index(long_term_debt_list, idx)
+            deferred_tax_liabilities = self._get_value_at_index(deferred_tax_liab_list, idx)
+            total_non_current_liabilities = self._get_value_at_index(total_non_curr_liab_list, idx)
+            other_non_current_liabilities = self._safe_subtract(total_non_current_liabilities, long_term_debt, deferred_tax_liabilities)
+            total_liabilities = self._get_value_at_index(total_liabilities_list, idx)
+            
+            common_stock = self._get_value_at_index(common_stock_list, idx)
+            additional_paid_in_capital = self._get_value_at_index(apic_list, idx)
+            retained_earnings = self._get_value_at_index(retained_earnings_list, idx)
+            other_equity = self._get_value_at_index(other_equity_list, idx)
+            minority_interest_equity = self._get_value_at_index(minority_interest_list, idx)
+            total_equity = self._get_value_at_index(total_equity_list, idx)
+            
+            book_value_per_share = self._get_value_at_index(bvps_list, idx)
+            net_debt = self._get_value_at_index(net_debt_list, idx)
+            working_capital = self._get_value_at_index(working_capital_list, idx)
             
             item = {
                 "period": p_info["period"],
                 "fiscalYear": p_info["fiscalYear"],
                 "fiscalQuarter": p_info["fiscalQuarter"],
-                "currency": "IDR",
-                "totalAssets": field_data["totalAssets"].get(key),
-                "totalLiabilities": field_data["totalLiabilities"].get(key),
-                "totalEquity": field_data["totalEquity"].get(key),
-                # Tambahkan field lainnya
+                "currency": currency,
+                "auditStatus": "UNAUDITED",
+                
+                "cash": cash,
+                "shortTermInvestments": None,
+                "accountsReceivable": accounts_receivable,
+                "inventory": inventory,
+                "otherCurrentAssets": other_current_assets,
+                "totalCurrentAssets": total_current_assets,
+                
+                "propertyPlantEquipment": property_plant_equipment,
+                "intangibleAssets": intangible_assets,
+                "goodwill": goodwill,
+                "longTermInvestments": None,
+                "otherNonCurrentAssets": other_non_current_assets,
+                "totalNonCurrentAssets": total_non_current_assets,
+                "totalAssets": total_assets,
+                
+                "shortTermDebt": short_term_debt,
+                "accountsPayable": accounts_payable,
+                "deferredRevenue": None,
+                "otherCurrentLiabilities": other_current_liabilities,
+                "totalCurrentLiabilities": total_current_liabilities,
+                
+                "longTermDebt": long_term_debt,
+                "deferredTaxLiabilities": deferred_tax_liabilities,
+                "otherNonCurrentLiabilities": other_non_current_liabilities,
+                "totalNonCurrentLiabilities": total_non_current_liabilities,
+                "totalLiabilities": total_liabilities,
+                
+                "commonStock": common_stock,
+                "additionalPaidInCapital": additional_paid_in_capital,
+                "retainedEarnings": retained_earnings,
+                "treasuryStock": None,
+                "otherEquity": other_equity,
+                "minorityInterestEquity": minority_interest_equity,
+                "totalEquity": total_equity,
+                
+                "bookValuePerShare": book_value_per_share,
+                "netDebt": net_debt,
+                "workingCapital": working_capital
             }
-            
             result_data.append(item)
-        
+            
         return result_data
 
 
 def scrape_balance_sheet(symbol: str, headless: bool = False) -> Dict:
-    """Helper function untuk scrape balance sheet"""
+    """
+    Helper function untuk scrape balance sheet dari Stockbit
+    Usage: result = scrape_balance_sheet("BBCA")
+    """
     scraper = StockbitBalanceSheetScraper(symbol, headless=headless)
     return scraper.scrape()
