@@ -199,7 +199,7 @@ class StockbitBalanceSheetScraper(BaseStockbitScraper):
     def _build_result(self, raw_data: Dict, periods: List[Dict], currency: str) -> List[Dict]:
         """Build results for each period"""
         # Fetch all rows first
-        cash_list = self._get_row_value(raw_data, id_key="Kas Dan Setara Kas", en_key="Cash And Cash Equivalents")
+        cash_list = self._get_row_value(raw_data, id_key="Aset", en_key="Assets")
         receivables_list = self._get_row_value(raw_data, id_key="Piutang Usaha", en_key="Trade Receivables")
         inventory_list = self._get_row_value(raw_data, id_key="Persediaan", en_key="Inventories")
         total_curr_assets_list = self._get_row_value(raw_data, id_key="Aset Lancar", en_key="Current Assets")
