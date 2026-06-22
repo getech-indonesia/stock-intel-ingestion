@@ -29,31 +29,27 @@ class StockbitBalanceSheetScraper(BaseStockbitScraper):
             # Navigate
             print(f"[2/7] Navigating to {self.symbol}...")
             self.navigate_to_symbol()
-            
-            # Check session setelah navigate
-            if self.session_handler.check_session_expired():
-                if not self.session_handler.handle_session_with_retry():
+
+            # Kalau Stockbit lempar ke login page, tahan dulu untuk login manual
+            if self.session_handler.is_login_page() or self.session_handler.check_session_expired():
+                if not self.session_handler.wait_for_manual_login(timeout=300):
                     raise ValueError("Session expired dan user tidak login")
-                
-                # FIX: Setelah login berhasil, navigate ulang ke URL symbol
-                print(f"   Resuming: Navigating back to {self.symbol}...")
-                self.navigate_to_symbol()
-                self.page.wait_for_timeout(3000)  # Tunggu halaman stabilize
-            
-            # Select Balance Sheet
-            print(f"[3/7] Selecting Balance Sheet...")
-            self.select_report_type("2")
-            
-            # Check session setelah select
-            if self.session_handler.check_session_expired():
-                if not self.session_handler.handle_session_with_retry():
-                    raise ValueError("Session expired setelah select balance sheet")
-                
-                # FIX: Resume lagi setelah login
                 print(f"   Resuming: Navigating back to {self.symbol}...")
                 self.navigate_to_symbol()
                 self.page.wait_for_timeout(3000)
-                self.select_report_type("2")  # Select lagi
+
+            # Select Balance Sheet
+            print(f"[3/7] Selecting Balance Sheet...")
+            self.select_report_type("2")
+
+            # Kalau setelah select masih di login page, retry lagi setelah manual login
+            if self.session_handler.is_login_page() or self.session_handler.check_session_expired():
+                if not self.session_handler.wait_for_manual_login(timeout=300):
+                    raise ValueError("Session expired setelah select balance sheet")
+                print(f"   Resuming: Navigating back to {self.symbol}...")
+                self.navigate_to_symbol()
+                self.page.wait_for_timeout(3000)
+                self.select_report_type("2")
             
             # Wait for table
             print(f"[4/7] Waiting for data table...")
