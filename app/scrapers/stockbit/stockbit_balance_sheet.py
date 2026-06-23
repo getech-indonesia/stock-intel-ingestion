@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 class StockbitBalanceSheetScraper(BaseStockbitScraper):
     """Scraper untuk Balance Sheet"""
     
+    MAX_SESSION_RECOVERY_ATTEMPTS = 2
+
     def __init__(self, symbol: str, headless: bool = False):
         super().__init__(symbol, report_type="2", headless=headless)
         self.field_mapping = BALANCE_SHEET_FIELDS
@@ -25,69 +27,7 @@ class StockbitBalanceSheetScraper(BaseStockbitScraper):
             print(f"[1/7] Launching browser...")
             self.launch_browser()
             self.session_handler = StockbitSessionHandler(self.page)
-            
-            # Navigate
-            print(f"[2/7] Navigating to {self.symbol}...")
-            self.navigate_to_symbol()
-
-            # Kalau Stockbit lempar ke login page, tahan dulu untuk login manual
-            if self.session_handler.is_login_page() or self.session_handler.check_session_expired():
-                if not self.session_handler.wait_for_manual_login(timeout=300):
-                    raise ValueError("Session expired dan user tidak login")
-                print(f"   Resuming: Navigating back to {self.symbol}...")
-                self.navigate_to_symbol()
-                self.page.wait_for_timeout(3000)
-
-            # Select Balance Sheet
-            print(f"[3/7] Selecting Balance Sheet...")
-            self.select_report_type("2")
-
-            # Kalau setelah select masih di login page, retry lagi setelah manual login
-            if self.session_handler.is_login_page() or self.session_handler.check_session_expired():
-                if not self.session_handler.wait_for_manual_login(timeout=300):
-                    raise ValueError("Session expired setelah select balance sheet")
-                print(f"   Resuming: Navigating back to {self.symbol}...")
-                self.navigate_to_symbol()
-                self.page.wait_for_timeout(3000)
-                self.select_report_type("2")
-            
-            # Wait for table
-            print(f"[4/7] Waiting for data table...")
-            self.session_handler.wait_for_element_with_session_check(
-                f"{DATA_TABLE_SELECTOR} tbody tr td[data-raw]",
-                timeout=30000
-            )
-            print("   Table data detected!")
-            
-            # Scroll to table
-            self.scroll_to_table()
-            
-            # Extract data
-            print(f"[5/7] Extracting data...")
-            raw_extracted = self._extract_balance_sheet_data()
-            raw_data = raw_extracted.get("result", {})
-            currency = raw_extracted.get("currency", "IDR")
-            
-            periods = self.extract_periods_from_header()
-            print(f"   Found {len(periods)} periods: {[p['key'] for p in periods[:5]]}...")
-            if not periods:
-                print(f"[WARN] Balance sheet period headers are empty for symbol {self.symbol}", flush=True)
-                logger.warning("Balance sheet period headers are empty for symbol %s", self.symbol)
-            
-            # Build result
-            print(f"[6/7] Building result...")
-            result_data = self._build_result(raw_data, periods, currency)
-            if not result_data:
-                print(f"[WARN] Balance sheet scrape produced empty data for symbol {self.symbol}", flush=True)
-                logger.warning("Balance sheet scrape produced empty data for symbol %s", self.symbol)
-            
-            print(f"[7/7] Done! Extracted {len(result_data)} periods")
-            
-            return {
-                "status": "ok",
-                "symbol": self.symbol,
-                "data": result_data
-            }
+            return self._scrape_with_session_retry()
             
         except PlaywrightTimeoutError as exc:
             raise ValueError(f"Timeout: {exc}") from exc
@@ -95,6 +35,106 @@ class StockbitBalanceSheetScraper(BaseStockbitScraper):
             raise ValueError(f"Failed: {exc}") from exc
         finally:
             self.close_browser()
+
+    def _scrape_with_session_retry(self) -> Dict:
+        """Run the scrape and recover once if Stockbit asks for a fresh login."""
+        for attempt in range(1, self.MAX_SESSION_RECOVERY_ATTEMPTS + 1):
+            try:
+                return self._scrape_once()
+            except ValueError as exc:
+                if not self._is_session_recovery_error(exc) or attempt >= self.MAX_SESSION_RECOVERY_ATTEMPTS:
+                    raise
+
+                print("\n[LOGIN] Session Stockbit habis. Tunggu login ulang, lalu lanjut request emiten yang sempat berhenti...")
+                if not self._wait_for_login_and_resume():
+                    raise ValueError("Session expired dan user tidak login") from exc
+
+        raise ValueError("Failed to recover Stockbit session")
+
+    def _scrape_once(self) -> Dict:
+        """Scrape sekali jalan untuk satu simbol."""
+        # Navigate
+        print(f"[2/7] Navigating to {self.symbol}...")
+        self.navigate_to_symbol()
+
+        # Kalau Stockbit lempar ke login page, tahan dulu untuk login manual
+        if self.session_handler.is_login_page() or self.session_handler.check_session_expired():
+            if not self._wait_for_login_and_resume():
+                raise ValueError("Session expired dan user tidak login")
+
+        # Select Balance Sheet
+        print(f"[3/7] Selecting Balance Sheet...")
+        self.select_report_type("2")
+
+        # Kalau setelah select masih di login page, retry lagi setelah manual login
+        if self.session_handler.is_login_page() or self.session_handler.check_session_expired():
+            if not self._wait_for_login_and_resume():
+                raise ValueError("Session expired setelah select balance sheet")
+
+        # Wait for table
+        print(f"[4/7] Waiting for data table...")
+        if not self.session_handler.wait_for_element_with_session_check(
+            f"{DATA_TABLE_SELECTOR} tbody tr td[data-raw]",
+            timeout=30000
+        ):
+            raise ValueError("Session expired saat menunggu data table balance sheet")
+        print("   Table data detected!")
+        
+        # Scroll to table
+        self.scroll_to_table()
+        
+        # Extract data
+        print(f"[5/7] Extracting data...")
+        raw_extracted = self._extract_balance_sheet_data()
+        raw_data = raw_extracted.get("result", {})
+        currency = raw_extracted.get("currency", "IDR")
+        
+        periods = self.extract_periods_from_header()
+        print(f"   Found {len(periods)} periods: {[p['key'] for p in periods[:5]]}...")
+        if not periods:
+            print(f"[WARN] Balance sheet period headers are empty for symbol {self.symbol}", flush=True)
+            logger.warning("Balance sheet period headers are empty for symbol %s", self.symbol)
+        
+        # Build result
+        print(f"[6/7] Building result...")
+        result_data = self._build_result(raw_data, periods, currency)
+        if not result_data:
+            print(f"[WARN] Balance sheet scrape produced empty data for symbol {self.symbol}", flush=True)
+            logger.warning("Balance sheet scrape produced empty data for symbol %s", self.symbol)
+        
+        print(f"[7/7] Done! Extracted {len(result_data)} periods")
+        
+        return {
+            "status": "ok",
+            "symbol": self.symbol,
+            "data": result_data
+        }
+
+    def _wait_for_login_and_resume(self) -> bool:
+        """Tunggu login manual lalu kembali ke simbol yang sedang diproses."""
+        if not self.session_handler.wait_for_manual_login(timeout=300):
+            return False
+
+        print(f"   Resuming: Navigating back to {self.symbol}...")
+        self.navigate_to_symbol()
+        self.page.wait_for_timeout(3000)
+        self.select_report_type("2")
+        return True
+
+    @staticmethod
+    def _is_session_recovery_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        if "user tidak login" in message:
+            return False
+        return any(
+            marker in message
+            for marker in (
+                "session expired",
+                "login",
+                "manual login",
+                "stockbit minta login",
+            )
+        )
 
     def _extract_balance_sheet_data(self) -> Dict[str, Any]:
         """Custom extractor to capture data-value-idr and section tracking"""
