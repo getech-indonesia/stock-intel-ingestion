@@ -77,13 +77,15 @@ class BaseStockbitScraper(ABC):
             "user_data_dir": str(self.profile_dir),
             "headless": self.headless,
             "args": [
+                "--start-maximized",
+                "--window-size=1920,1080",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
             ],
             "ignore_default_args": ["--enable-automation"],
-            "viewport": {"width": 1920, "height": 1080},
+            "no_viewport": True,
         }
         
         if executable_path:
