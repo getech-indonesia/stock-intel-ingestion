@@ -4,7 +4,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .base_scraper import BaseStockbitScraper
 from .stockbit_session import StockbitSessionHandler
-from .config import BALANCE_SHEET_FIELDS, DATA_TABLE_SELECTOR
+from .config import BALANCE_SHEET_FIELDS, DATA_TABLE_SELECTOR, FINANCIAL_WRAPPER
 
 
 logger = logging.getLogger(__name__)
@@ -73,12 +73,14 @@ class StockbitBalanceSheetScraper(BaseStockbitScraper):
 
         # Wait for table
         print(f"[4/7] Waiting for data table...")
-        if not self.session_handler.wait_for_element_with_session_check(
-            f"{DATA_TABLE_SELECTOR} tbody tr td[data-raw]",
-            timeout=30000
-        ):
-            raise ValueError("Session expired saat menunggu data table balance sheet")
-        print("   Table data detected!")
+        try:
+            self.page.locator(FINANCIAL_WRAPPER).wait_for(state="visible", timeout=30000)
+            self.page.wait_for_timeout(1000)
+        except PlaywrightTimeoutError:
+            if self.session_handler.is_login_page() or self.session_handler.check_session_expired():
+                raise ValueError("Session expired saat menunggu data table balance sheet")
+            raise ValueError("Data table balance sheet tidak terdeteksi")
+        print("   Table wrapper detected!")
         
         # Scroll to table
         self.scroll_to_table()
@@ -376,3 +378,4 @@ def scrape_balance_sheet(symbol: str, headless: bool = False) -> Dict:
     """
     scraper = StockbitBalanceSheetScraper(symbol, headless=headless)
     return scraper.scrape()
+

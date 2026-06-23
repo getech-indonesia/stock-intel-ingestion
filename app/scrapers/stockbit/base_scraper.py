@@ -46,7 +46,7 @@ class BaseStockbitScraper(ABC):
         return None
     
     def _parse_numeric(self, raw_value: Optional[str]) -> Optional[Union[int, float]]:
-        """Parse nilai numerik dari atribut data-raw"""
+        """Parse nilai numerik dari atribut data-value-idr"""
         if raw_value is None:
             return None
         raw_text = str(raw_value).strip()
@@ -159,7 +159,7 @@ class BaseStockbitScraper(ABC):
         """Tunggu tabel data load"""
         try:
             self.page.wait_for_selector(
-                f"{DATA_TABLE_SELECTOR} tbody tr td[data-raw]",
+                f"{DATA_TABLE_SELECTOR} tbody tr td[data-value-idr]",
                 timeout=timeout,
                 state="attached"
             )
@@ -228,11 +228,11 @@ class BaseStockbitScraper(ABC):
                         // Skip kalau fieldName kosong
                         if (!fieldName || fieldName.trim() === '') return;
                         
-                        const tds = row.querySelectorAll('td[data-raw]');
+                        const tds = row.querySelectorAll('td[data-value-idr]');
                         // Simpan hanya kalau belum ada (prioritas tabel pertama yang ketemu)
                         if (tds.length > 0 && !result[fieldName]) {
                             result[fieldName] = Array.from(tds).map(td => 
-                                td.getAttribute('data-raw')
+                                td.getAttribute('data-value-idr')
                             );
                         }
                     }
@@ -273,3 +273,4 @@ class BaseStockbitScraper(ABC):
         if pretax_income is not None and pretax_income != 0 and tax_expense is not None:
             return round((abs(tax_expense) / abs(pretax_income)) * 100, 2)
         return None
+

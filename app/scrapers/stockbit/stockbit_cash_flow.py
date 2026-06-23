@@ -31,7 +31,7 @@ class StockbitCashFlowScraper(BaseStockbitScraper):
             
             print(f"[4/6] Waiting for data table...")
             self.session_handler.wait_for_element_with_session_check(
-                f"{DATA_TABLE_SELECTOR} tbody tr td[data-raw]",
+                f"{DATA_TABLE_SELECTOR} tbody tr td[data-value-idr]",
                 timeout=30000
             )
             

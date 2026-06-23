@@ -54,7 +54,7 @@ class StockbitIncomeStatementScraper(BaseStockbitScraper):
             # Wait for table
             print(f"[4/7] Waiting for data table...")
             self.session_handler.wait_for_element_with_session_check(
-                f"{DATA_TABLE_SELECTOR} tbody tr td[data-raw]",
+                f"{DATA_TABLE_SELECTOR} tbody tr td[data-value-idr]",
                 timeout=30000
             )
             print("   Table data detected!")
@@ -194,3 +194,4 @@ def scrape_stockbit_income_statement(symbol: str, headless: bool = False) -> Dic
     """
     scraper = StockbitIncomeStatementScraper(symbol, headless=headless)
     return scraper.scrape()
+
