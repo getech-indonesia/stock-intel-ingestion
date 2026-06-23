@@ -117,7 +117,7 @@ class StockbitBalanceSheetScraper(BaseStockbitScraper):
 
         print(f"   Resuming: Navigating back to {self.symbol}...")
         self.navigate_to_symbol()
-        self.page.wait_for_timeout(3000)
+        self.page.wait_for_timeout(self.POST_LOGIN_RESUME_SETTLE_MS)
         self.select_report_type("2")
         return True
 

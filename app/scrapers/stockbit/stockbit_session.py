@@ -50,7 +50,7 @@ class StockbitSessionHandler:
         while time.time() - start_time < timeout:
             if not self.is_login_page() and not self.check_session_expired():
                 print("[LOGIN] Login berhasil terdeteksi, lanjut scraping...")
-                time.sleep(2)
+                time.sleep(0.5)
                 return True
 
             elapsed = int(time.time() - start_time)

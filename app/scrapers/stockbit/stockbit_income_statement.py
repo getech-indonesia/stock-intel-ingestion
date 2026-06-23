@@ -36,7 +36,7 @@ class StockbitIncomeStatementScraper(BaseStockbitScraper):
                     raise ValueError("Session expired dan user tidak login")
                 print(f"   Resuming: Navigating back to {self.symbol}...")
                 self.navigate_to_symbol()
-                self.page.wait_for_timeout(3000)
+                self.page.wait_for_timeout(self.POST_LOGIN_RESUME_SETTLE_MS)
 
             # Select Income Statement
             print(f"[3/7] Selecting Income Statement...")
@@ -48,7 +48,7 @@ class StockbitIncomeStatementScraper(BaseStockbitScraper):
                     raise ValueError("Session expired setelah select income statement")
                 print(f"   Resuming: Navigating back to {self.symbol}...")
                 self.navigate_to_symbol()
-                self.page.wait_for_timeout(3000)
+                self.page.wait_for_timeout(self.POST_LOGIN_RESUME_SETTLE_MS)
                 self.select_report_type("1")
             
             # Wait for table

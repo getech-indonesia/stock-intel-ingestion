@@ -19,6 +19,12 @@ from .config import (
 
 class BaseStockbitScraper(ABC):
     """Base class untuk semua scraper Stockbit"""
+
+    PAGE_SETTLE_MS = 400
+    POST_SELECT_SETTLE_MS = 700
+    POST_LOGIN_RESUME_SETTLE_MS = 1000
+    SCROLL_SETTLE_RANGE = (0.2, 0.5)
+    BLOCKED_RESOURCE_TYPES = {"media"}
     
     def __init__(self, symbol: str, report_type: str, headless: bool = False):
         self.symbol = str(symbol).strip().upper()
@@ -92,6 +98,7 @@ class BaseStockbitScraper(ABC):
             context_args["executable_path"] = executable_path
         
         self.context = playwright.chromium.launch_persistent_context(**context_args)
+        self._setup_resource_blocking()
         self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
         
         # Inject stealth scripts
@@ -104,6 +111,22 @@ class BaseStockbitScraper(ABC):
             });
             window.chrome = { runtime: {} };
         """)
+
+    def _setup_resource_blocking(self):
+        """Skip heavy resources that don't affect selector-based scraping."""
+        if not self.context:
+            return
+
+        def _route_handler(route):
+            try:
+                if route.request.resource_type in self.BLOCKED_RESOURCE_TYPES:
+                    route.abort()
+                    return
+            except Exception:
+                pass
+            route.continue_()
+
+        self.context.route("**/*", _route_handler)
     
     def close_browser(self):
         """Close browser"""
@@ -118,7 +141,6 @@ class BaseStockbitScraper(ABC):
         
         try:
             self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            self.page.wait_for_load_state("networkidle", timeout=30000)
         except PlaywrightTimeoutError:
             pass  # Continue anyway
     
@@ -129,7 +151,7 @@ class BaseStockbitScraper(ABC):
         try:
             self.page.wait_for_selector(REPORT_TYPE_SELECTOR, timeout=15000)
             self.page.select_option(REPORT_TYPE_SELECTOR, report_type)
-            self.page.wait_for_timeout(2000)  # Wait for data load
+            self.page.wait_for_timeout(self.POST_SELECT_SETTLE_MS)
         except PlaywrightTimeoutError:
             raise ValueError(f"Report type selector not found for {report_type}")
     
@@ -149,10 +171,10 @@ class BaseStockbitScraper(ABC):
         self.page.evaluate("""
             () => {
                 const table = document.querySelector('#data_table_1');
-                if (table) table.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                if (table) table.scrollIntoView({ behavior: 'auto', block: 'center' });
             }
         """)
-        time.sleep(random.uniform(1.0, 2.0))
+        time.sleep(random.uniform(*self.SCROLL_SETTLE_RANGE))
     
     def extract_periods_from_header(self) -> List[Dict]:
         """Extract semua periode dari header tabel"""
