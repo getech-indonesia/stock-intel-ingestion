@@ -315,8 +315,8 @@ def extract_financial_report():
         }), 400
 
     try:
-        from app.services.pdf_extractor_service import extract_financial_report_from_pdf
-        result = extract_financial_report_from_pdf(url)
+        from app.services.financial_report_extractor_service import extract_financial_report_from_url
+        result = extract_financial_report_from_url(url)
         return jsonify(result)
     except ValueError as exc:
         return jsonify({

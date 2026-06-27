@@ -74,12 +74,12 @@ def test_extract_financial_report_success(monkeypatch):
         "cashFlows": []
     }
 
-    def mock_extract(pdf_url):
-        assert pdf_url == "https://example.com/report.pdf"
+    def mock_extract(url):
+        assert url == "https://example.com/report.pdf"
         return expected_response
 
     monkeypatch.setattr(
-        "app.services.pdf_extractor_service.extract_financial_report_from_pdf",
+        "app.services.financial_report_extractor_service.extract_financial_report_from_url",
         mock_extract
     )
 

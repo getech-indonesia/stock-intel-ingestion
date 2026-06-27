@@ -4,6 +4,8 @@ from app.scrapers.common import _download_file, _extract_attachment_text
 from utils.ai import _build_client, _safe_json_parse
 from config.settings import OPENAI_MODEL
 
+SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".xls"}
+
 # Template structures matching user requested JSON schema
 DEFAULT_INCOME_STATEMENT = {
     "period": "Q1",
@@ -154,26 +156,37 @@ def _merge_and_coerce(extracted_item: dict, template: dict) -> dict:
     return merged
 
 
-def extract_financial_report_from_pdf(pdf_url: str) -> dict:
+def _filename_from_url(url: str) -> str:
+    filename = url.rsplit("/", 1)[-1].split("?", 1)[0].strip()
+    if not filename or "." not in filename:
+        raise ValueError("Unable to determine file type from URL")
+    extension = "." + filename.rsplit(".", 1)[-1].lower()
+    if extension not in SUPPORTED_EXTENSIONS:
+        supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+        raise ValueError(f"Unsupported file type '{extension}'. Supported: {supported}")
+    return filename
+
+
+def extract_financial_report_from_url(url: str) -> dict:
     """
-    Downloads a PDF from the given URL, extracts text,
+    Downloads a financial report document from the given URL, extracts text,
     uses ChatGPT to extract and screen the financial data,
     and returns a structured JSON matching the user schema.
     """
-    # 1. Download the PDF
-    try:
-        content = _download_file(pdf_url)
-    except Exception as exc:
-        raise ValueError(f"Failed to download PDF from URL: {exc}")
+    file_name = _filename_from_url(url)
 
-    # 2. Extract text from PDF
     try:
-        extracted_text = _extract_attachment_text("report.pdf", content)
+        content = _download_file(url)
     except Exception as exc:
-        raise ValueError(f"Failed to extract text from PDF: {exc}")
+        raise ValueError(f"Failed to download document from URL: {exc}")
+
+    try:
+        extracted_text = _extract_attachment_text(file_name, content)
+    except Exception as exc:
+        raise ValueError(f"Failed to extract text from document: {exc}")
 
     if not extracted_text or not extracted_text.strip():
-        raise ValueError("PDF content is empty or contains no extractable text")
+        raise ValueError("Document content is empty or contains no extractable text")
 
     # Limit to first 80,000 characters to prevent token limit issues
     trimmed_text = extracted_text[:80000]
