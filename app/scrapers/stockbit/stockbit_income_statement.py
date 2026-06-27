@@ -174,7 +174,7 @@ class StockbitIncomeStatementScraper(BaseStockbitScraper):
                 "incomeTaxExpense": tax_exp,
                 "effectiveTaxRate": effective_tax_rate,
                 "netIncome": field_data["netIncome"].get(key),
-                "netIncomeAttributable": field_data["netIncome"].get(key),
+                "netIncomeAttributable": field_data["netIncomeAttributable"].get(key),
                 "minorityInterest": field_data["minorityInterest"].get(key),
                 "eps": field_data["eps"].get(key),
                 "epsDiluted": None,
