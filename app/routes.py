@@ -285,3 +285,48 @@ def get_financial_statement_ai():
             "message": f"Failed to fetch financial statement AI data: {str(e)}",
         }), 502
 
+
+@bp.route("/extract-xbrl", methods=["GET", "POST"])
+def extract_xbrl():
+    """Placeholder endpoint for XBRL extraction."""
+    return jsonify({
+        "status": "ok",
+        "message": "XBRL extraction endpoint (placeholder)"
+    })
+
+
+@bp.route("/extract-financial-report", methods=["GET", "POST"])
+def extract_financial_report():
+    # Retrieve url from either query params (GET) or json/form data (POST)
+    url = None
+    if request.method == "POST":
+        if request.is_json:
+            body = request.get_json(silent=True) or {}
+            url = body.get("url")
+        if not url:
+            url = request.form.get("url")
+    else:
+        url = request.args.get("url")
+
+    if not url:
+        return jsonify({
+            "status": "error",
+            "message": "'url' parameter is required"
+        }), 400
+
+    try:
+        from app.services.pdf_extractor_service import extract_financial_report_from_pdf
+        result = extract_financial_report_from_pdf(url)
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc)
+        }), 400
+    except Exception as exc:
+        return jsonify({
+            "status": "error",
+            "message": f"Failed to process financial report: {str(exc)}"
+        }), 500
+
+
